@@ -105,6 +105,9 @@ def extract_accounts_and_services(
         for service in account.get("services", []) or []:
             if service.get("closedDate"):
                 continue
+            svc_status = str(service.get("status") or "").lower()
+            if svc_status == "closed":
+                continue
 
             service_type = str(service.get("serviceType") or "").lower()
             if service_type and not any(
@@ -122,6 +125,9 @@ def extract_accounts_and_services(
         for account in data.get("accounts", []) or []:
             for service in account.get("services", []) or []:
                 if service.get("closedDate"):
+                    continue
+                svc_status = str(service.get("status") or "").lower()
+                if svc_status == "closed":
                     continue
                 enriched = dict(service)
                 enriched["accountId"] = account.get("accountId")
