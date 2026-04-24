@@ -30,17 +30,10 @@ def _payload_data(payload: dict[str, Any] | None) -> Any:
 
 
 def _latest_invoice(data: dict[str, Any]) -> dict[str, Any] | None:
-    """Return the latest known invoice."""
+    """Return the latest invoice from the dashboard payload."""
     dashboard_data = _payload_data(data.get("dashboard")) or {}
     invoice = dashboard_data.get("lastestInvoice")
-    if isinstance(invoice, dict):
-        return invoice
-
-    summary = data.get("invoice_summary") or {}
-    invoices = summary.get("invoices") or []
-    if invoices:
-        return invoices[0]
-    return None
+    return invoice if isinstance(invoice, dict) else None
 
 
 def _recent_transactions(data: dict[str, Any]) -> list[dict[str, Any]]:
@@ -86,32 +79,6 @@ def _latest_invoice_value(data: dict[str, Any]) -> Any:
 
 def _latest_invoice_attrs(data: dict[str, Any]) -> dict[str, Any]:
     return dict(_latest_invoice(data) or {})
-
-
-def _invoice_count_value(data: dict[str, Any]) -> Any:
-    summary = data.get("invoice_summary") or {}
-    return summary.get("totalCount")
-
-
-def _invoice_count_attrs(data: dict[str, Any]) -> dict[str, Any]:
-    summary = data.get("invoice_summary") or {}
-    return {"invoices": summary.get("invoices", [])}
-
-
-def _referral_links_value(data: dict[str, Any]) -> Any:
-    referral = _payload_data(data.get("referral_links"))
-    if isinstance(referral, dict):
-        return referral.get("totalCount")
-    if isinstance(referral, list):
-        return len(referral)
-    return None
-
-
-def _referral_links_attrs(data: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "referral_links": _payload_data(data.get("referral_links")),
-        "referral_lookup": _payload_data(data.get("referral_lookup")),
-    }
 
 
 def _signup_services_value(data: dict[str, Any]) -> int:
@@ -164,20 +131,6 @@ GLOBAL_SENSORS: tuple[GloBirdSensorDescription, ...] = (
         native_unit_of_measurement=CURRENCY_AUD,
         device_class=SensorDeviceClass.MONETARY,
         icon="mdi:file-document",
-    ),
-    GloBirdSensorDescription(
-        key="invoice_count",
-        name="Invoice Count",
-        value_fn=_invoice_count_value,
-        attrs_fn=_invoice_count_attrs,
-        icon="mdi:file-document-multiple",
-    ),
-    GloBirdSensorDescription(
-        key="referral_links",
-        name="Referral Links",
-        value_fn=_referral_links_value,
-        attrs_fn=_referral_links_attrs,
-        icon="mdi:account-multiple-plus",
     ),
     GloBirdSensorDescription(
         key="signup_services",

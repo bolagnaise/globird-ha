@@ -13,7 +13,6 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .api import (
     GloBirdClient,
     build_cost_summary,
-    build_invoice_summary,
     build_usage_summary,
     build_weather_summary,
     extract_accounts_and_services,
@@ -184,16 +183,6 @@ class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     cache,
                     _errors=fetch_errors,
                 )
-                data["referral_links"] = await self._fetch_optional(
-                    "referral_links", self.client.get_referral_links, cache, _errors=fetch_errors
-                )
-                data["referral_lookup"] = await self._fetch_optional(
-                    "referral_lookup", self.client.lookup_referral_link, cache, _errors=fetch_errors
-                )
-                data["invoices"] = await self._fetch_optional(
-                    "invoices", self.client.get_invoices, cache, _errors=fetch_errors
-                )
-                data["invoice_summary"] = build_invoice_summary(data.get("invoices"))
                 data["_fetch_errors"] = fetch_errors
             finally:
                 self.client.enable_reauth()

@@ -15,7 +15,7 @@ from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicNumbers
 from yarl import URL
 
-from .const import BASE_URL, DEFAULT_INVOICE_LIMIT, DEFAULT_USAGE_DAYS, SENSITIVE_KEYS
+from .const import BASE_URL, DEFAULT_USAGE_DAYS, SENSITIVE_KEYS
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -275,29 +275,6 @@ def build_cost_summary(cost_payload: dict[str, Any] | None) -> dict[str, Any]:
         if latest_row
         else None,
         "daily": daily,
-    }
-
-
-def build_invoice_summary(invoice_payload: dict[str, Any] | None) -> dict[str, Any]:
-    """Build a compact invoice summary."""
-    data = _payload_data(invoice_payload) or {}
-    invoices = data.get("data", []) if isinstance(data, dict) else []
-    if not isinstance(invoices, list):
-        invoices = []
-
-    return {
-        "totalCount": data.get("totalCount") if isinstance(data, dict) else len(invoices),
-        "invoices": [
-            {
-                "invoiceNumber": invoice.get("invoiceNumber"),
-                "issuedDate": invoice.get("issuedDate"),
-                "dueDate": invoice.get("dueDate"),
-                "amount": invoice.get("amount"),
-                "discountedAmont": invoice.get("discountedAmont"),
-                "documentId": invoice.get("documentId"),
-            }
-            for invoice in invoices[:DEFAULT_INVOICE_LIMIT]
-        ],
     }
 
 
@@ -713,27 +690,6 @@ class GloBirdClient:
         if account_id is not None:
             path = f"{path}?accountId={account_id}"
         return await self._request_json("GET", path)
-
-    async def get_invoices(self, *, limit: int = DEFAULT_INVOICE_LIMIT) -> dict[str, Any]:
-        """Fetch recent invoices."""
-        return await self._request_json(
-            "POST",
-            "/api/transaction/invoice",
-            json_data={
-                "startDate": None,
-                "endDate": None,
-                "offset": 0,
-                "limit": limit,
-            },
-        )
-
-    async def get_referral_links(self) -> dict[str, Any]:
-        """Fetch referral link list."""
-        return await self._request_json("GET", "/api/referral/getReferralLinks")
-
-    async def lookup_referral_link(self) -> dict[str, Any]:
-        """Fetch the default referral lookup payload."""
-        return await self._request_json("POST", "/api/referral/lookupReferralLink")
 
     def export_session_cookies(self) -> list[dict[str, str]]:
         """Export current session cookies for persistence."""
