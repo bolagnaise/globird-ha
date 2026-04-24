@@ -420,7 +420,7 @@ class GloBirdUsageTotalSensor(GloBirdServiceBaseSensor):
     icon = "mdi:lightning-bolt"
     native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
     device_class = SensorDeviceClass.ENERGY
-    state_class = SensorStateClass.MEASUREMENT
+    state_class = SensorStateClass.TOTAL
 
     @property
     def native_value(self) -> Any:
@@ -450,7 +450,7 @@ class GloBirdLatestDayUsageSensor(GloBirdServiceBaseSensor):
     icon = "mdi:calendar-today"
     native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
     device_class = SensorDeviceClass.ENERGY
-    state_class = SensorStateClass.MEASUREMENT
+    state_class = SensorStateClass.TOTAL
 
     @property
     def native_value(self) -> Any:
