@@ -1,8 +1,7 @@
 {
   "name": "GloBird HA",
   "content_in_root": false,
+  "country": "AU",
   "render_readme": true,
-  "domains": ["sensor"],
   "homeassistant": "2024.6.0"
 }
-
