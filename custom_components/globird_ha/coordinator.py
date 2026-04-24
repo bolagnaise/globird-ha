@@ -89,12 +89,16 @@ class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         key: str,
         callback: Callable[[], Awaitable[dict[str, Any]]],
         cache: dict[str, Any],
+        *,
+        _errors: dict[str, str] | None = None,
     ) -> dict[str, Any] | None:
         """Fetch optional data, falling back to cache on endpoint failure."""
         try:
             return await callback()
         except Exception as err:  # noqa: BLE001 - optional portal endpoint.
             _LOGGER.warning("GloBird optional fetch failed for %s: %s", key, err)
+            if _errors is not None:
+                _errors[key] = str(err)
             cached_value = cache.get(key)
             return cached_value if isinstance(cached_value, dict) else None
 
@@ -119,6 +123,8 @@ class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
             accounts, services = extract_accounts_and_services(current_user)
 
+            fetch_errors: dict[str, str] = {}
+
             data: dict[str, Any] = {
                 "current_user": current_user,
                 "accounts": accounts,
@@ -127,38 +133,40 @@ class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             }
 
             data["dashboard"] = await self._fetch_optional(
-                "dashboard", self.client.get_dashboard, cache
+                "dashboard", self.client.get_dashboard, cache, _errors=fetch_errors
             )
             data["balance"] = await self._fetch_optional(
-                "balance", self.client.get_balance, cache
+                "balance", self.client.get_balance, cache, _errors=fetch_errors
             )
             data["signup_info"] = await self._fetch_optional(
-                "signup_info", self.client.get_signup_info, cache
+                "signup_info", self.client.get_signup_info, cache, _errors=fetch_errors
             )
             data["service_status"] = await self._fetch_optional(
-                "service_status", self.client.get_account_service_status, cache
+                "service_status", self.client.get_account_service_status, cache, _errors=fetch_errors
             )
             data["meter_types"] = await self._fetch_optional(
-                "meter_types", self.client.get_power_meter_types, cache
+                "meter_types", self.client.get_power_meter_types, cache, _errors=fetch_errors
             )
             data["read_meters"] = await self._fetch_optional(
-                "read_meters", self.client.get_read_meters, cache
+                "read_meters", self.client.get_read_meters, cache, _errors=fetch_errors
             )
             data["weather_impacted_days"] = await self._fetch_optional(
                 "weather_impacted_days",
                 self.client.get_weather_impacted_days,
                 cache,
+                _errors=fetch_errors,
             )
             data["referral_links"] = await self._fetch_optional(
-                "referral_links", self.client.get_referral_links, cache
+                "referral_links", self.client.get_referral_links, cache, _errors=fetch_errors
             )
             data["referral_lookup"] = await self._fetch_optional(
-                "referral_lookup", self.client.lookup_referral_link, cache
+                "referral_lookup", self.client.lookup_referral_link, cache, _errors=fetch_errors
             )
             data["invoices"] = await self._fetch_optional(
-                "invoices", self.client.get_invoices, cache
+                "invoices", self.client.get_invoices, cache, _errors=fetch_errors
             )
             data["invoice_summary"] = build_invoice_summary(data.get("invoices"))
+            data["_fetch_errors"] = fetch_errors
 
             service_data = dict(cache.get("service_data", {}))
             now = time.time()
