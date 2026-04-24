@@ -171,6 +171,16 @@ class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             finally:
                 self.client.enable_reauth()
 
+            # If optional endpoints returned 403 while we have a stored token, the
+            # token has expired. Clear it so the next update cycle re-authenticates.
+            if self.client.access_token and any(
+                "403" in err for err in fetch_errors.values()
+            ):
+                _LOGGER.info(
+                    "GloBird access token expired (403 responses); will re-authenticate next cycle"
+                )
+                self.client.set_access_token(None)
+
             service_data = dict(cache.get("service_data", {}))
             now = time.time()
             should_refresh_detail = (

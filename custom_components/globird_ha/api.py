@@ -375,8 +375,8 @@ class GloBirdClient:
         """Return the current Bearer access token."""
         return self._access_token
 
-    def set_access_token(self, token: str) -> None:
-        """Restore a previously persisted access token."""
+    def set_access_token(self, token: str | None) -> None:
+        """Restore or clear the access token."""
         self._access_token = token
 
     def disable_reauth(self) -> None:
