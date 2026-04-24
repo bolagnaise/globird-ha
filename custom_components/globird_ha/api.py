@@ -103,6 +103,9 @@ def extract_accounts_and_services(
         accounts.append(account_summary)
 
         for service in account.get("services", []) or []:
+            if service.get("closedDate"):
+                continue
+
             service_type = str(service.get("serviceType") or "").lower()
             if service_type and not any(
                 marker in service_type for marker in ("power", "electric")
@@ -118,6 +121,8 @@ def extract_accounts_and_services(
     if not services:
         for account in data.get("accounts", []) or []:
             for service in account.get("services", []) or []:
+                if service.get("closedDate"):
+                    continue
                 enriched = dict(service)
                 enriched["accountId"] = account.get("accountId")
                 enriched["accountNumber"] = account.get("accountNumber")
