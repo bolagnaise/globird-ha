@@ -1,6 +1,7 @@
 """GloBird customer portal API client and data helpers."""
 from __future__ import annotations
 
+import base64
 import html
 import json
 import logging
@@ -9,6 +10,9 @@ from http.cookies import SimpleCookie
 from typing import Any
 
 import aiohttp
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicNumbers
 from yarl import URL
 
 from .const import BASE_URL, DEFAULT_INVOICE_LIMIT, DEFAULT_USAGE_DAYS, SENSITIVE_KEYS
@@ -430,17 +434,43 @@ class GloBirdClient:
         except Exception:  # noqa: BLE001 - best-effort; login will surface any real error
             pass
 
+    async def _encrypt_password(self, password: str) -> str:
+        """RSA-OAEP (SHA-256) encrypt password using the portal's public JWK."""
+        jwk = await self._raw_request_json("GET", "/api/account/publicjwk")
+
+        def _pad(b64: str) -> str:
+            return b64 + "=" * (-len(b64) % 4)
+
+        n_int = int.from_bytes(base64.urlsafe_b64decode(_pad(jwk["n"])), "big")
+        e_int = int.from_bytes(base64.urlsafe_b64decode(_pad(jwk["e"])), "big")
+        public_key = RSAPublicNumbers(e_int, n_int).public_key()
+
+        encrypted = public_key.encrypt(
+            password.encode("utf-8"),
+            padding.OAEP(
+                mgf=padding.MGF1(algorithm=hashes.SHA256()),
+                algorithm=hashes.SHA256(),
+                label=None,
+            ),
+        )
+        return base64.b64encode(encrypted).decode("utf-8")
+
     async def authenticate(self, email: str, password: str) -> dict[str, Any]:
         """Authenticate and validate the portal session."""
         self._email = email
         self._password = password
 
         await self._establish_session()
+        encrypted_password = await self._encrypt_password(password)
 
         payload = await self._raw_request_json(
             "POST",
             "/api/account/login",
-            json_data={"emailAddress": email, "password": password},
+            json_data={
+                "emailAddress": email,
+                "password": encrypted_password,
+                "rememberMe": False,
+            },
             allow_api_failure=True,
         )
         data = _payload_data(payload) or {}
