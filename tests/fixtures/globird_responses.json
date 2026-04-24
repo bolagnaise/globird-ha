@@ -150,7 +150,11 @@
   "usage": {
     "data": [
       {
-        "usageArray": [0.1, 0.2, 0.3],
+        "usageArray": [
+          0.1,
+          0.2,
+          0.3
+        ],
         "timePeriods": [
           {
             "startTime": "00:00",
@@ -167,7 +171,11 @@
         "minQualityMethod": "A"
       },
       {
-        "usageArray": [0.4, 0.5, 0.6],
+        "usageArray": [
+          0.4,
+          0.5,
+          0.6
+        ],
         "timePeriods": [
           {
             "startTime": "00:00",
@@ -190,18 +198,46 @@
   "cost": {
     "data": [
       {
-        "chargeCategory": "Usage",
+        "chargeCategory": "SOLAR",
         "chargeType": null,
-        "date": "2026-04-01",
+        "date": "2026/04/01",
+        "amount": -0.3,
+        "quantity": 2.0
+      },
+      {
+        "chargeCategory": "USAGE",
+        "chargeType": null,
+        "date": "2026/04/01",
         "amount": 0.45,
         "quantity": 1.5
       },
       {
-        "chargeCategory": "Usage",
+        "chargeCategory": "SUPPLY",
         "chargeType": null,
-        "date": "2026-04-02",
+        "date": "2026/04/01",
+        "amount": 1.33,
+        "quantity": 0.0
+      },
+      {
+        "chargeCategory": "SOLAR",
+        "chargeType": null,
+        "date": "2026/04/02",
+        "amount": -2.36,
+        "quantity": 16.0
+      },
+      {
+        "chargeCategory": "USAGE",
+        "chargeType": null,
+        "date": "2026/04/02",
         "amount": 0.6,
         "quantity": 2.0
+      },
+      {
+        "chargeCategory": "SUPPLY",
+        "chargeType": null,
+        "date": "2026/04/02",
+        "amount": 1.33,
+        "quantity": 0.0
       }
     ],
     "message": null,

@@ -247,7 +247,7 @@ def build_cost_summary(cost_payload: dict[str, Any] | None) -> dict[str, Any]:
     daily: list[dict[str, Any]] = []
     total_amount = 0.0
     total_quantity = 0.0
-    latest_row: dict[str, Any] | None = None
+    latest_date_key = ""
 
     for row in rows:
         amount = _as_float(row.get("amount")) or 0.0
@@ -263,17 +263,25 @@ def build_cost_summary(cost_payload: dict[str, Any] | None) -> dict[str, Any]:
                 "chargeType": row.get("chargeType"),
             }
         )
-        if latest_row is None or _date_key(row, "date") >= _date_key(latest_row, "date"):
-            latest_row = row
+        dk = _date_key(row, "date")
+        if dk > latest_date_key:
+            latest_date_key = dk
+
+    latest_day: str | None = latest_date_key or None
+    # GloBird returns multiple rows per day (SOLAR, USAGE, SUPPLY). Sum them all to get
+    # the true net daily cost rather than just the last row (always SUPPLY, a positive charge).
+    latest_day_amount: float | None = None
+    if latest_day:
+        latest_day_amount = _round(
+            sum(e["amount"] for e in daily if e["date"] == latest_day), 2
+        )
 
     return {
         "days": len(daily),
         "total_amount": _round(total_amount, 2),
         "total_quantity": _round(total_quantity),
-        "latest_day": latest_row.get("date") if latest_row else None,
-        "latest_day_amount": _round(_as_float(latest_row.get("amount")), 2)
-        if latest_row
-        else None,
+        "latest_day": latest_day,
+        "latest_day_amount": latest_day_amount,
         "daily": daily,
     }
 

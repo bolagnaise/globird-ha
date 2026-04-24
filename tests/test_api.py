@@ -27,7 +27,6 @@ GloBirdCaptchaRequired = api.GloBirdCaptchaRequired
 GloBirdAuthError = api.GloBirdAuthError
 GloBirdClient = api.GloBirdClient
 build_cost_summary = api.build_cost_summary
-build_invoice_summary = api.build_invoice_summary
 build_usage_summary = api.build_usage_summary
 build_weather_summary = api.build_weather_summary
 extract_accounts_and_services = api.extract_accounts_and_services
@@ -173,7 +172,6 @@ def test_extract_accounts_services_and_summaries() -> None:
     accounts, services = extract_accounts_and_services(fixtures["current_user"])
     usage = build_usage_summary(fixtures["usage"])
     cost = build_cost_summary(fixtures["cost"])
-    invoices = build_invoice_summary(fixtures["invoices"])
     weather = build_weather_summary(fixtures["weather"])
 
     assert len(accounts) == 2
@@ -181,10 +179,30 @@ def test_extract_accounts_services_and_summaries() -> None:
     assert usage["total_usage"] == 3.5
     assert usage["latest_day"] == "2026-04-02"
     assert usage["latest_intervals"] == [0.4, 0.5, 0.6]
+    # Fixture: 2 days × (SOLAR + USAGE + SUPPLY). Net = (1.48) + (-0.43) = 1.05
     assert cost["total_amount"] == 1.05
-    assert cost["total_quantity"] == 3.5
-    assert invoices["totalCount"] == 1
+    assert cost["total_quantity"] == 21.5
+    # latest_day_amount is the net sum for 2026/04/02: -2.36 + 0.60 + 1.33 = -0.43
+    assert cost["latest_day_amount"] == -0.43
     assert weather["latest_max_temp"] == 29
+
+
+def test_cost_summary_net_daily_is_sum_not_last_row() -> None:
+    """latest_day_amount sums all rows for the day — not just the last row (SUPPLY charge)."""
+    payload = {
+        "data": [
+            {"chargeCategory": "SOLAR",  "chargeType": None, "date": "2026/04/24", "amount": -3.12, "quantity": 21.0},
+            {"chargeCategory": "USAGE",  "chargeType": None, "date": "2026/04/24", "amount":  0.21, "quantity": 47.0},
+            {"chargeCategory": "SUPPLY", "chargeType": None, "date": "2026/04/24", "amount":  1.40, "quantity":  0.0},
+        ],
+        "message": None,
+        "success": True,
+    }
+    cost = build_cost_summary(payload)
+    # Net = -3.12 + 0.21 + 1.40 = -1.51 — NOT the supply-charge-only value of 1.40
+    assert cost["total_amount"] == -1.51
+    assert cost["latest_day"] == "2026/04/24"
+    assert cost["latest_day_amount"] == -1.51
 
 
 def test_redact_sensitive_diagnostics() -> None:
