@@ -191,6 +191,16 @@ def build_usage_summary(
     if not isinstance(rows, list):
         rows = []
 
+    if not rows:
+        return {
+            "days": 0,
+            "total_usage": None,
+            "latest_day": None,
+            "latest_day_usage": None,
+            "daily": [],
+            "latest_intervals": [],
+        }
+
     daily: list[dict[str, Any]] = []
     total = 0.0
     latest_row: dict[str, Any] | None = None
@@ -633,14 +643,18 @@ class GloBirdClient:
         *,
         identifier: str,
         serial_number: str,
+        account_service_id: int | str | None = None,
         is_smart: bool = True,
         days: int = DEFAULT_USAGE_DAYS,
     ) -> dict[str, Any]:
         """Fetch smart meter usage data."""
         from_slash, to_slash, *_ = date_range_for_usage(days)
+        path = "/api/site/accountservicetimezonesmartmeterread"
+        if account_service_id is not None:
+            path = f"{path}?accountServiceId={account_service_id}"
         return await self._request_json(
             "POST",
-            "/api/site/accountservicetimezonesmartmeterread",
+            path,
             json_data={
                 "identifier": identifier,
                 "serialNumber": serial_number,

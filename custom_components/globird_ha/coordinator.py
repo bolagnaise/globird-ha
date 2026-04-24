@@ -273,6 +273,7 @@ class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 lambda: self.client.get_usage(
                     identifier=str(identifier),
                     serial_number=str(serial_number),
+                    account_service_id=account_service_id,
                     is_smart=is_smart,
                     days=DEFAULT_USAGE_DAYS,
                 ),
