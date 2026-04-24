@@ -24,5 +24,4 @@ async def async_get_config_entry_diagnostics(
     return {
         "entry": redact_sensitive(config),
         "data": redact_sensitive(data),
-        "last_login_debug": coordinator.client.last_login_debug if coordinator else {},
     }

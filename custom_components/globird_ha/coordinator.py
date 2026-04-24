@@ -72,13 +72,10 @@ class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._cache = loaded_cache if isinstance(loaded_cache, dict) else None
         cookie_state = await self._cookie_store.async_load()
         cookies = cookie_state.get("cookies", []) if isinstance(cookie_state, dict) else []
-        stored_token = cookie_state.get("access_token") if isinstance(cookie_state, dict) else None
         if isinstance(cookies, list) and cookies:
             self.client.import_session_cookies(cookies)
             restored = await self.client.restore_session(self.email, self.password)
             if restored is not None:
-                if stored_token:
-                    self.client.set_access_token(stored_token)
                 _LOGGER.info("GloBird session restored from persisted cookies")
 
         self._initialized = True
@@ -107,19 +104,9 @@ class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         cache = self._cache or {}
 
         try:
-            if self.client.is_authenticated and self.client.access_token is None:
-                # Cookies are valid but the Bearer token was lost or expired.
-                # Re-authenticate without resetting the session (fresh_session=False) so the
-                # existing ARRAffinity routing cookie is preserved and the login POST hits
-                # the same backend shard as the active session.
-                try:
-                    current_user = await self.client.authenticate(
-                        self.email, self.password, fresh_session=False
-                    )
-                except Exception as err:  # noqa: BLE001
-                    _LOGGER.warning("GloBird token refresh failed (%s); continuing with cookies only", err)
-                    current_user = await self.client.get_current_user()
-            elif self.client.is_authenticated:
+            if self.client.is_authenticated:
+                # Session cookies are still valid — _request_json will automatically
+                # re-authenticate (fresh_session=False) if a 403 is returned.
                 current_user = await self.client.get_current_user()
             else:
                 current_user = await self.client.authenticate(self.email, self.password)
@@ -187,16 +174,6 @@ class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             finally:
                 self.client.enable_reauth()
 
-            # If optional endpoints returned 403 while we have a stored token, the
-            # token has expired. Clear it so the next update cycle re-authenticates.
-            if self.client.access_token and any(
-                "403" in err for err in fetch_errors.values()
-            ):
-                _LOGGER.info(
-                    "GloBird access token expired (403 responses); will re-authenticate next cycle"
-                )
-                self.client.set_access_token(None)
-
             service_data = dict(cache.get("service_data", {}))
             now = time.time()
             should_refresh_detail = (
@@ -221,7 +198,6 @@ class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             await self._cache_store.async_save(data)
             await self._cookie_store.async_save({
                 "cookies": self.client.export_session_cookies(),
-                "access_token": self.client.access_token,
             })
             return data
 

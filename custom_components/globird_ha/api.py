@@ -348,24 +348,13 @@ class GloBirdClient:
 
         self._email: str | None = None
         self._password: str | None = None
-        self._access_token: str | None = None
         self._authenticated = False
         self._reauth_enabled = True
-        self.last_login_debug: dict[str, Any] = {}
 
     @property
     def is_authenticated(self) -> bool:
         """Return whether this client believes it has an active session."""
         return self._authenticated
-
-    @property
-    def access_token(self) -> str | None:
-        """Return the current Bearer access token."""
-        return self._access_token
-
-    def set_access_token(self, token: str | None) -> None:
-        """Restore or clear the access token."""
-        self._access_token = token
 
     def disable_reauth(self) -> None:
         """Suppress automatic re-authentication (use during bulk optional fetches)."""
@@ -382,15 +371,12 @@ class GloBirdClient:
 
     def _headers(self) -> dict[str, str]:
         """Build portal-like request headers."""
-        headers = {
+        return {
             "Accept": "application/json, text/plain, */*",
             "Origin": self._base_url,
             "Referer": f"{self._base_url}/",
             "User-Agent": "GloBird-HA/0.1",
         }
-        if self._access_token:
-            headers["Authorization"] = f"Bearer {self._access_token}"
-        return headers
 
     async def _raw_request_json(
         self,
@@ -531,16 +517,6 @@ class GloBirdClient:
         )
         data = _payload_data(payload) or {}
 
-        self.last_login_debug = {
-            "success": payload.get("success"),
-            "isLoginSucceeded": data.get("isLoginSucceeded"),
-            "requireCaptcha": data.get("requireRetryCaptCha") or data.get("requireHCaptcha"),
-            "dataKeys": list(data.keys()) if data else [],
-            "message": payload.get("message") or data.get("message"),
-            "hasToken": bool(data.get("accessToken")),
-        }
-        _LOGGER.debug("GloBird login debug: %s", self.last_login_debug)
-
         if data.get("requireRetryCaptCha") or data.get("requireHCaptcha"):
             self._authenticated = False
             raise GloBirdCaptchaRequired("GloBird requested captcha verification")
@@ -551,10 +527,6 @@ class GloBirdClient:
             raise GloBirdAuthError(
                 f"GloBird login failed{f': {portal_msg}' if portal_msg else ''}"
             )
-
-        access_token = data.get("accessToken")
-        if isinstance(access_token, str) and access_token:
-            self._access_token = access_token
 
         self._authenticated = True
         current_user = await self._raw_request_json("GET", "/api/account/currentuser")
