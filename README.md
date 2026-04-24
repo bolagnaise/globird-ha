@@ -20,6 +20,14 @@ This integration logs in to `https://myaccount.globirdenergy.com.au` and exposes
 
 [Open this repository in HACS](https://my.home-assistant.io/redirect/hacs_repository/?owner=bolagnaise&repository=globird-ha&category=integration)
 
+If **GloBird HA** does not appear in the Add integration search after installing through HACS:
+
+1. Confirm HACS installed version `0.1.3` or newer.
+2. Restart Home Assistant, not just HACS.
+3. Search **GloBird HA** from **Settings > Devices & services > Add integration**.
+4. Check that `/config/custom_components/globird_ha/manifest.json` exists.
+5. Check `home-assistant.log` for `globird_ha` or `config_flow` import errors.
+
 ### Manual
 
 1. Copy `custom_components/globird_ha` into your Home Assistant `custom_components` directory.
