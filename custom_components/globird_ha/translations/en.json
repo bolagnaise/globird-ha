@@ -1,0 +1,70 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "GloBird HA",
+        "description": "Enter your GloBird customer portal credentials.",
+        "data": {
+          "email": "Email",
+          "password": "Password"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to GloBird",
+      "invalid_auth": "Invalid GloBird email or password",
+      "captcha_required": "GloBird requires captcha verification, which is not supported by this integration",
+      "unknown": "Unexpected error"
+    },
+    "abort": {
+      "already_configured": "This GloBird account is already configured"
+    }
+  },
+  "entity": {
+    "sensor": {
+      "balance": {
+        "name": "Balance"
+      },
+      "dashboard_balance": {
+        "name": "Dashboard Balance"
+      },
+      "latest_invoice": {
+        "name": "Latest Invoice"
+      },
+      "invoice_count": {
+        "name": "Invoice Count"
+      },
+      "referral_links": {
+        "name": "Referral Links"
+      },
+      "signup_services": {
+        "name": "Signup Services"
+      },
+      "account_summary": {
+        "name": "Account Summary"
+      },
+      "service_status": {
+        "name": "Service Status"
+      },
+      "meter_info": {
+        "name": "Meter Info"
+      },
+      "usage_total": {
+        "name": "Recent Usage Total"
+      },
+      "latest_day_usage": {
+        "name": "Latest Day Usage"
+      },
+      "cost_total": {
+        "name": "Recent Cost Total"
+      },
+      "latest_day_cost": {
+        "name": "Latest Daily Cost"
+      },
+      "weather_summary": {
+        "name": "Weather Summary"
+      }
+    }
+  }
+}
+

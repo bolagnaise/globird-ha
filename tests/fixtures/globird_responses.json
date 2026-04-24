@@ -1,0 +1,251 @@
+{
+  "login_success": {
+    "data": {
+      "isLoginSucceeded": true,
+      "alreadyLoggedIn": false,
+      "accessToken": null,
+      "requireRetryCaptCha": false,
+      "requireHCaptcha": false
+    },
+    "message": null,
+    "success": true
+  },
+  "login_captcha": {
+    "data": {
+      "isLoginSucceeded": false,
+      "alreadyLoggedIn": false,
+      "accessToken": null,
+      "requireRetryCaptCha": false,
+      "requireHCaptcha": true
+    },
+    "message": null,
+    "success": true
+  },
+  "login_failure": {
+    "data": {
+      "isLoginSucceeded": false,
+      "alreadyLoggedIn": false,
+      "accessToken": null,
+      "requireRetryCaptCha": false,
+      "requireHCaptcha": false
+    },
+    "message": "Invalid login",
+    "success": false
+  },
+  "current_user": {
+    "data": {
+      "emailAddress": "user@example.test",
+      "hasUnlinkedAccount": false,
+      "isImpersonatedUser": false,
+      "accounts": [
+        {
+          "accountId": 1001,
+          "accountNumber": "GB0001",
+          "accountAddress": "1 Example Street",
+          "services": [
+            {
+              "accountServiceId": 2001,
+              "siteIdentifier": "NMI00000001",
+              "siteAddress": "1 Example Street",
+              "postCode": "4000",
+              "status": "Active",
+              "serviceType": "Power"
+            }
+          ]
+        },
+        {
+          "accountId": 1002,
+          "accountNumber": "GB0002",
+          "accountAddress": "2 Example Street",
+          "services": [
+            {
+              "accountServiceId": 2002,
+              "siteIdentifier": "NMI00000002",
+              "siteAddress": "2 Example Street",
+              "postCode": "4001",
+              "status": "Active",
+              "serviceType": "Power"
+            }
+          ]
+        }
+      ]
+    },
+    "message": null,
+    "success": true
+  },
+  "dashboard": {
+    "data": {
+      "accountId": 1001,
+      "accountNumber": "GB0001",
+      "accountName": "Example User",
+      "currentBalance": 123.45,
+      "lastestInvoice": {
+        "invoiceNumber": "INV0001",
+        "issuedDate": "2026-04-01",
+        "dueDate": "2026-04-15",
+        "amount": 101.25,
+        "discountedAmont": 99.25,
+        "documentId": 3001
+      },
+      "recentAccountTransactions": [
+        {
+          "transactionDate": "2026-04-02",
+          "description": "Payment received",
+          "amount": -50.0,
+          "isInvoice": false,
+          "isDirectDebitRollBack": false
+        }
+      ]
+    },
+    "message": null,
+    "success": true
+  },
+  "balance": {
+    "data": {
+      "balance": 123.45,
+      "maxRefundableAmount": 50.0,
+      "showRefundableAmount": true
+    },
+    "message": "ok",
+    "success": true
+  },
+  "signup_info": {
+    "data": [
+      {
+        "accountServiceId": 2001,
+        "serviceTypeId": "POWER",
+        "transferType": "MoveIn",
+        "signupStatus": "Complete"
+      }
+    ],
+    "message": null,
+    "success": true
+  },
+  "service_status": {
+    "data": {
+      "2001": {
+        "accountServiceId": 2001,
+        "nmi": "NMI00000001",
+        "status": "Active",
+        "frmpDate": "2025-01-01"
+      }
+    },
+    "message": null,
+    "success": true
+  },
+  "read_meters": {
+    "data": [
+      {
+        "meterReadType": "Smart",
+        "serialNumber": "MTR00000001",
+        "suffix": null,
+        "serialStatus": "Active",
+        "registerId": null,
+        "suffixStatus": null
+      }
+    ],
+    "message": null,
+    "success": true
+  },
+  "usage": {
+    "data": [
+      {
+        "usageArray": [0.1, 0.2, 0.3],
+        "timePeriods": [
+          {
+            "startTime": "00:00",
+            "endTime": "00:30"
+          }
+        ],
+        "usage": 1.5,
+        "readDate": "2026-04-01",
+        "chargeType": "Peak",
+        "chargeCategoryCode": "Usage",
+        "meterStatus": "Actual",
+        "suffix": "E1",
+        "serial": "MTR00000001",
+        "minQualityMethod": "A"
+      },
+      {
+        "usageArray": [0.4, 0.5, 0.6],
+        "timePeriods": [
+          {
+            "startTime": "00:00",
+            "endTime": "00:30"
+          }
+        ],
+        "usage": 2.0,
+        "readDate": "2026-04-02",
+        "chargeType": "Peak",
+        "chargeCategoryCode": "Usage",
+        "meterStatus": "Actual",
+        "suffix": "E1",
+        "serial": "MTR00000001",
+        "minQualityMethod": "A"
+      }
+    ],
+    "message": null,
+    "success": true
+  },
+  "cost": {
+    "data": [
+      {
+        "chargeCategory": "Usage",
+        "chargeType": null,
+        "date": "2026-04-01",
+        "amount": 0.45,
+        "quantity": 1.5
+      },
+      {
+        "chargeCategory": "Usage",
+        "chargeType": null,
+        "date": "2026-04-02",
+        "amount": 0.6,
+        "quantity": 2.0
+      }
+    ],
+    "message": null,
+    "success": true
+  },
+  "invoices": {
+    "data": {
+      "totalCount": 1,
+      "data": [
+        {
+          "invoiceNumber": "INV0001",
+          "issuedDate": "2026-04-01",
+          "dueDate": "2026-04-15",
+          "amount": 101.25,
+          "discountedAmont": 99.25,
+          "documentId": 3001
+        }
+      ]
+    },
+    "message": "ok",
+    "success": true
+  },
+  "referrals": {
+    "data": {
+      "totalCount": 1,
+      "data": [
+        {
+          "description": "Example referral"
+        }
+      ]
+    },
+    "message": null,
+    "success": true
+  },
+  "weather": {
+    "data": [
+      {
+        "dateAsDate": "2026-04-02",
+        "obMaxTemp": 29,
+        "obMinTemp": 19,
+        "distanceMeters": 1000
+      }
+    ],
+    "message": null,
+    "success": true
+  }
+}
