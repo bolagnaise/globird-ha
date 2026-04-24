@@ -10,10 +10,6 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-try:
-    from homeassistant.const import CURRENCY_DOLLAR
-except ImportError:  # pragma: no cover - compatibility fallback.
-    CURRENCY_DOLLAR = "$"
 from homeassistant.const import UnitOfEnergy, UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -22,6 +18,8 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .api import service_id
 from .const import DOMAIN
 from .coordinator import GloBirdCoordinator
+
+CURRENCY_AUD = "AUD"
 
 
 def _payload_data(payload: dict[str, Any] | None) -> Any:
@@ -145,7 +143,7 @@ GLOBAL_SENSORS: tuple[GloBirdSensorDescription, ...] = (
         name="Balance",
         value_fn=_balance_value,
         attrs_fn=_balance_attrs,
-        native_unit_of_measurement=CURRENCY_DOLLAR,
+        native_unit_of_measurement=CURRENCY_AUD,
         device_class=SensorDeviceClass.MONETARY,
         icon="mdi:cash",
     ),
@@ -154,7 +152,7 @@ GLOBAL_SENSORS: tuple[GloBirdSensorDescription, ...] = (
         name="Dashboard Balance",
         value_fn=_dashboard_balance_value,
         attrs_fn=_dashboard_attrs,
-        native_unit_of_measurement=CURRENCY_DOLLAR,
+        native_unit_of_measurement=CURRENCY_AUD,
         device_class=SensorDeviceClass.MONETARY,
         icon="mdi:view-dashboard",
     ),
@@ -163,7 +161,7 @@ GLOBAL_SENSORS: tuple[GloBirdSensorDescription, ...] = (
         name="Latest Invoice",
         value_fn=_latest_invoice_value,
         attrs_fn=_latest_invoice_attrs,
-        native_unit_of_measurement=CURRENCY_DOLLAR,
+        native_unit_of_measurement=CURRENCY_AUD,
         device_class=SensorDeviceClass.MONETARY,
         icon="mdi:file-document",
     ),
@@ -246,7 +244,6 @@ class GloBirdGlobalSensor(GloBirdBaseSensor):
     ) -> None:
         """Initialize the sensor."""
         super().__init__(coordinator, config_entry)
-        self.entity_description = description
         self._attr_name = description.name
         self._attr_unique_id = f"{config_entry.entry_id}_{description.key}"
         self._attr_native_unit_of_measurement = description.native_unit_of_measurement
@@ -481,7 +478,7 @@ class GloBirdCostTotalSensor(GloBirdServiceBaseSensor):
     sensor_key = "cost_total"
     sensor_name = "Recent Cost Total"
     icon = "mdi:cash-multiple"
-    native_unit_of_measurement = CURRENCY_DOLLAR
+    native_unit_of_measurement = CURRENCY_AUD
     device_class = SensorDeviceClass.MONETARY
     state_class = SensorStateClass.MEASUREMENT
 
@@ -512,7 +509,7 @@ class GloBirdLatestDayCostSensor(GloBirdServiceBaseSensor):
     sensor_key = "latest_day_cost"
     sensor_name = "Latest Daily Cost"
     icon = "mdi:calendar-cash"
-    native_unit_of_measurement = CURRENCY_DOLLAR
+    native_unit_of_measurement = CURRENCY_AUD
     device_class = SensorDeviceClass.MONETARY
     state_class = SensorStateClass.MEASUREMENT
 
