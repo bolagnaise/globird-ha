@@ -80,14 +80,7 @@ class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if restored is not None:
                 if stored_token:
                     self.client.set_access_token(stored_token)
-                    _LOGGER.info("GloBird session restored from persisted cookies and token")
-                else:
-                    # No persisted token — re-authenticate to obtain a fresh one
-                    _LOGGER.info("GloBird cookies valid but no access token; re-authenticating")
-                    try:
-                        await self.client.authenticate(self.email, self.password)
-                    except Exception as err:  # noqa: BLE001
-                        _LOGGER.warning("GloBird re-auth for token failed: %s", err)
+                _LOGGER.info("GloBird session restored from persisted cookies")
 
         self._initialized = True
 
@@ -111,7 +104,15 @@ class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         cache = self._cache or {}
 
         try:
-            if self.client.is_authenticated:
+            if self.client.is_authenticated and self.client.access_token is None:
+                # Cookies are valid but the Bearer token was lost (e.g. after HA restart).
+                # Re-authenticate once to recover the token; fall back to cookie-only on failure.
+                try:
+                    current_user = await self.client.authenticate(self.email, self.password)
+                except Exception as err:  # noqa: BLE001
+                    _LOGGER.warning("GloBird token refresh failed (%s); continuing with cookies only", err)
+                    current_user = await self.client.get_current_user()
+            elif self.client.is_authenticated:
                 current_user = await self.client.get_current_user()
             else:
                 current_user = await self.client.authenticate(self.email, self.password)
