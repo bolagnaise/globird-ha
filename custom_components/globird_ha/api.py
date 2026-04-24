@@ -543,12 +543,13 @@ class GloBirdClient:
         )
         data = _payload_data(payload) or {}
 
-        _LOGGER.debug(
-            "GloBird login response keys: success=%s isLoginSucceeded=%s captcha=%s/%s msg=%s",
+        _LOGGER.warning(
+            "GloBird login response: success=%s isLoginSucceeded=%s captcha=%s/%s dataKeys=%s msg=%s",
             payload.get("success"),
             data.get("isLoginSucceeded"),
             data.get("requireRetryCaptCha"),
             data.get("requireHCaptcha"),
+            list(data.keys()) if data else [],
             payload.get("message") or data.get("message"),
         )
 
