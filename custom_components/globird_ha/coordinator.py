@@ -127,6 +127,14 @@ class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
             accounts, services = extract_accounts_and_services(current_user)
 
+            # Extract primary identifiers for account-scoped endpoints
+            primary_account_id = (
+                services[0].get("accountId") if services
+                else (accounts[0].get("accountId") if accounts else None)
+            )
+            primary_nmi = services[0].get("siteIdentifier") if services else None
+            primary_account_service_id = services[0].get("accountServiceId") if services else None
+
             fetch_errors: dict[str, str] = {}
             self.client.disable_reauth()
             try:
@@ -138,26 +146,41 @@ class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 }
 
                 data["dashboard"] = await self._fetch_optional(
-                    "dashboard", self.client.get_dashboard, cache, _errors=fetch_errors
+                    "dashboard",
+                    lambda: self.client.get_dashboard(account_id=primary_account_id),
+                    cache,
+                    _errors=fetch_errors,
                 )
                 data["balance"] = await self._fetch_optional(
-                    "balance", self.client.get_balance, cache, _errors=fetch_errors
+                    "balance",
+                    lambda: self.client.get_balance(account_id=primary_account_id),
+                    cache,
+                    _errors=fetch_errors,
                 )
                 data["signup_info"] = await self._fetch_optional(
-                    "signup_info", self.client.get_signup_info, cache, _errors=fetch_errors
+                    "signup_info",
+                    lambda: self.client.get_signup_info(account_id=primary_account_id),
+                    cache,
+                    _errors=fetch_errors,
                 )
                 data["service_status"] = await self._fetch_optional(
                     "service_status", self.client.get_account_service_status, cache, _errors=fetch_errors
                 )
                 data["meter_types"] = await self._fetch_optional(
-                    "meter_types", self.client.get_power_meter_types, cache, _errors=fetch_errors
+                    "meter_types",
+                    lambda: self.client.get_power_meter_types(nmi=primary_nmi),
+                    cache,
+                    _errors=fetch_errors,
                 )
                 data["read_meters"] = await self._fetch_optional(
-                    "read_meters", self.client.get_read_meters, cache, _errors=fetch_errors
+                    "read_meters",
+                    lambda: self.client.get_read_meters(account_service_id=primary_account_service_id),
+                    cache,
+                    _errors=fetch_errors,
                 )
                 data["weather_impacted_days"] = await self._fetch_optional(
                     "weather_impacted_days",
-                    self.client.get_weather_impacted_days,
+                    lambda: self.client.get_weather_impacted_days(account_id=primary_account_id),
                     cache,
                     _errors=fetch_errors,
                 )

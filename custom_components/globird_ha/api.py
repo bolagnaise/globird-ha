@@ -364,6 +364,7 @@ class GloBirdClient:
         self._access_token: str | None = None
         self._authenticated = False
         self._reauth_enabled = True
+        self.last_login_debug: dict[str, Any] = {}
 
     @property
     def is_authenticated(self) -> bool:
@@ -543,15 +544,15 @@ class GloBirdClient:
         )
         data = _payload_data(payload) or {}
 
-        _LOGGER.warning(
-            "GloBird login response: success=%s isLoginSucceeded=%s captcha=%s/%s dataKeys=%s msg=%s",
-            payload.get("success"),
-            data.get("isLoginSucceeded"),
-            data.get("requireRetryCaptCha"),
-            data.get("requireHCaptcha"),
-            list(data.keys()) if data else [],
-            payload.get("message") or data.get("message"),
-        )
+        self.last_login_debug = {
+            "success": payload.get("success"),
+            "isLoginSucceeded": data.get("isLoginSucceeded"),
+            "requireCaptcha": data.get("requireRetryCaptCha") or data.get("requireHCaptcha"),
+            "dataKeys": list(data.keys()) if data else [],
+            "message": payload.get("message") or data.get("message"),
+            "hasToken": bool(data.get("accessToken")),
+        }
+        _LOGGER.debug("GloBird login debug: %s", self.last_login_debug)
 
         if data.get("requireRetryCaptCha") or data.get("requireHCaptcha"):
             self._authenticated = False
@@ -588,29 +589,44 @@ class GloBirdClient:
         """Fetch the current user payload."""
         return await self._request_json("GET", "/api/account/currentuser")
 
-    async def get_dashboard(self) -> dict[str, Any]:
+    async def get_dashboard(self, *, account_id: int | str | None = None) -> dict[str, Any]:
         """Fetch dashboard account data."""
-        return await self._request_json("GET", "/api/account/dashboard")
+        path = "/api/account/dashboard"
+        if account_id is not None:
+            path = f"{path}?accountId={account_id}"
+        return await self._request_json("GET", path)
 
-    async def get_balance(self) -> dict[str, Any]:
+    async def get_balance(self, *, account_id: int | str | None = None) -> dict[str, Any]:
         """Fetch account balance data."""
-        return await self._request_json("GET", "/api/transaction/balance")
+        path = "/api/transaction/balance"
+        if account_id is not None:
+            path = f"{path}?accountId={account_id}"
+        return await self._request_json("GET", path)
 
-    async def get_signup_info(self) -> dict[str, Any]:
+    async def get_signup_info(self, *, account_id: int | str | None = None) -> dict[str, Any]:
         """Fetch signup/service information."""
-        return await self._request_json("GET", "/api/account/getSignupInfo")
+        path = "/api/account/getSignupInfo"
+        if account_id is not None:
+            path = f"{path}?accountId={account_id}"
+        return await self._request_json("GET", path)
 
     async def get_account_service_status(self) -> dict[str, Any]:
         """Fetch account service statuses."""
         return await self._request_json("GET", "/api/site/accountservicestatus")
 
-    async def get_power_meter_types(self) -> dict[str, Any]:
+    async def get_power_meter_types(self, *, nmi: str | None = None) -> dict[str, Any]:
         """Fetch power meter type lookup data."""
-        return await self._request_json("GET", "/api/site/GetPowerMeterTypes")
+        path = "/api/site/GetPowerMeterTypes"
+        if nmi is not None:
+            path = f"{path}?nmi={nmi}"
+        return await self._request_json("GET", path)
 
-    async def get_read_meters(self) -> dict[str, Any]:
+    async def get_read_meters(self, *, account_service_id: int | str | None = None) -> dict[str, Any]:
         """Fetch meter read metadata."""
-        return await self._request_json("GET", "/api/site/readmeters")
+        path = "/api/site/readmeters"
+        if account_service_id is not None:
+            path = f"{path}?accountServiceId={account_service_id}"
+        return await self._request_json("GET", path)
 
     async def get_usage(
         self,
@@ -677,11 +693,12 @@ class GloBirdClient:
             },
         )
 
-    async def get_weather_impacted_days(self) -> dict[str, Any]:
+    async def get_weather_impacted_days(self, *, account_id: int | str | None = None) -> dict[str, Any]:
         """Fetch weather impacted day count."""
-        return await self._request_json(
-            "GET", "/api/weather/calculateweatherimpacteddays"
-        )
+        path = "/api/weather/calculateweatherimpacteddays"
+        if account_id is not None:
+            path = f"{path}?accountId={account_id}"
+        return await self._request_json("GET", path)
 
     async def get_invoices(self, *, limit: int = DEFAULT_INVOICE_LIMIT) -> dict[str, Any]:
         """Fetch recent invoices."""
