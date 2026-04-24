@@ -166,6 +166,8 @@ async def async_setup_entry(
                 GloBirdMeterInfoSensor(coordinator, config_entry, service),
                 GloBirdUsageTotalSensor(coordinator, config_entry, service),
                 GloBirdLatestDayUsageSensor(coordinator, config_entry, service),
+                GloBirdSolarExportTotalSensor(coordinator, config_entry, service),
+                GloBirdLatestDaySolarExportSensor(coordinator, config_entry, service),
                 GloBirdCostTotalSensor(coordinator, config_entry, service),
                 GloBirdLatestDayCostSensor(coordinator, config_entry, service),
                 GloBirdWeatherSummarySensor(coordinator, config_entry, service),
@@ -421,6 +423,64 @@ class GloBirdLatestDayUsageSensor(GloBirdServiceBaseSensor):
             {
                 "latest_day": summary.get("latest_day"),
                 "latest_intervals": summary.get("latest_intervals", []),
+            }
+        )
+        return attrs
+
+
+class GloBirdSolarExportTotalSensor(GloBirdServiceBaseSensor):
+    """Recent solar export total sensor (B1 register)."""
+
+    sensor_key = "solar_export_total"
+    sensor_name = "Recent Solar Export Total"
+    icon = "mdi:solar-power"
+    native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+    device_class = SensorDeviceClass.ENERGY
+    state_class = SensorStateClass.TOTAL
+
+    @property
+    def native_value(self) -> Any:
+        """Return total recent solar export (feed-in)."""
+        return (self._service_detail().get("usage_summary") or {}).get("total_export")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return solar export summary attributes."""
+        attrs = self._service_attrs()
+        summary = self._service_detail().get("usage_summary") or {}
+        attrs.update(
+            {
+                "days": summary.get("days"),
+                "latest_day": summary.get("latest_day"),
+                "daily": summary.get("export_daily", []),
+            }
+        )
+        return attrs
+
+
+class GloBirdLatestDaySolarExportSensor(GloBirdServiceBaseSensor):
+    """Latest day solar export sensor (B1 register)."""
+
+    sensor_key = "latest_day_solar_export"
+    sensor_name = "Latest Day Solar Export"
+    icon = "mdi:solar-power-variant"
+    native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+    device_class = SensorDeviceClass.ENERGY
+    state_class = SensorStateClass.TOTAL
+
+    @property
+    def native_value(self) -> Any:
+        """Return latest day solar export."""
+        return (self._service_detail().get("usage_summary") or {}).get("latest_day_export")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return latest day attributes."""
+        attrs = self._service_attrs()
+        summary = self._service_detail().get("usage_summary") or {}
+        attrs.update(
+            {
+                "latest_day": summary.get("latest_day"),
             }
         )
         return attrs

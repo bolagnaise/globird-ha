@@ -183,18 +183,14 @@ def select_meter_for_service(
     return active_meters[0] if active_meters else meters[0]
 
 
-def build_usage_summary(
-    usage_payload: dict[str, Any] | None,
+def _build_register_summary(
+    rows: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Build recorder-safe usage summary and latest interval attributes."""
-    rows = _payload_data(usage_payload)
-    if not isinstance(rows, list):
-        rows = []
-
+    """Summarise a list of usage rows for a single register (E1 or B1)."""
     if not rows:
         return {
             "days": 0,
-            "total_usage": None,
+            "total": None,
             "latest_day": None,
             "latest_day_usage": None,
             "daily": [],
@@ -208,33 +204,72 @@ def build_usage_summary(
     for row in rows:
         usage = _as_float(row.get("usage")) or 0.0
         total += usage
-        summary = {
-            "readDate": row.get("readDate"),
-            "usage": _round(usage),
-            "chargeType": row.get("chargeType"),
-            "chargeCategoryCode": row.get("chargeCategoryCode"),
-            "meterStatus": row.get("meterStatus"),
-            "minQualityMethod": row.get("minQualityMethod"),
-        }
-        daily.append(summary)
-        if latest_row is None or _date_key(row, "readDate") >= _date_key(
-            latest_row, "readDate"
-        ):
+        daily.append(
+            {
+                "readDate": row.get("readDate"),
+                "usage": _round(usage),
+                "chargeType": row.get("chargeType"),
+                "chargeCategoryCode": row.get("chargeCategoryCode"),
+                "meterStatus": row.get("meterStatus"),
+                "minQualityMethod": row.get("minQualityMethod"),
+            }
+        )
+        if latest_row is None or _date_key(row, "readDate") >= _date_key(latest_row, "readDate"):
             latest_row = row
 
-    latest_intervals = []
+    latest_intervals: list[Any] = []
     if latest_row:
         values = latest_row.get("usageArray")
         if isinstance(values, list):
-            latest_intervals = [_round(_as_float(value), 5) for value in values]
+            latest_intervals = [_round(_as_float(v), 5) for v in values]
 
     return {
         "days": len(daily),
-        "total_usage": _round(total),
+        "total": _round(total),
         "latest_day": latest_row.get("readDate") if latest_row else None,
         "latest_day_usage": _round(_as_float(latest_row.get("usage"))) if latest_row else None,
         "daily": daily,
         "latest_intervals": latest_intervals,
+    }
+
+
+def build_usage_summary(
+    usage_payload: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Build recorder-safe usage summary split by register (E1 import / B1 solar export)."""
+    rows = _payload_data(usage_payload)
+    if not isinstance(rows, list):
+        rows = []
+
+    if not rows:
+        return {
+            "days": 0,
+            "total_usage": None,
+            "latest_day": None,
+            "latest_day_usage": None,
+            "daily": [],
+            "latest_intervals": [],
+            "total_export": None,
+            "latest_day_export": None,
+            "export_daily": [],
+        }
+
+    e1_rows = [r for r in rows if str(r.get("suffix") or "").upper() != "B1"]
+    b1_rows = [r for r in rows if str(r.get("suffix") or "").upper() == "B1"]
+
+    e1 = _build_register_summary(e1_rows)
+    b1 = _build_register_summary(b1_rows)
+
+    return {
+        "days": e1["days"],
+        "total_usage": e1["total"],
+        "latest_day": e1["latest_day"],
+        "latest_day_usage": e1["latest_day_usage"],
+        "daily": e1["daily"],
+        "latest_intervals": e1["latest_intervals"],
+        "total_export": b1["total"],
+        "latest_day_export": b1["latest_day_usage"],
+        "export_daily": b1["daily"],
     }
 
 
