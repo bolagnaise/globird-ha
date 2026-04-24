@@ -363,6 +363,7 @@ class GloBirdClient:
         self._password: str | None = None
         self._access_token: str | None = None
         self._authenticated = False
+        self._reauth_enabled = True
 
     @property
     def is_authenticated(self) -> bool:
@@ -377,6 +378,14 @@ class GloBirdClient:
     def set_access_token(self, token: str) -> None:
         """Restore a previously persisted access token."""
         self._access_token = token
+
+    def disable_reauth(self) -> None:
+        """Suppress automatic re-authentication (use during bulk optional fetches)."""
+        self._reauth_enabled = False
+
+    def enable_reauth(self) -> None:
+        """Re-enable automatic re-authentication."""
+        self._reauth_enabled = True
 
     async def close(self) -> None:
         """Close the owned HTTP session."""
@@ -453,7 +462,7 @@ class GloBirdClient:
             )
         except GloBirdSessionExpired:
             self._authenticated = False
-            if not retry_auth or not self._email or not self._password:
+            if not retry_auth or not self._reauth_enabled or not self._email or not self._password:
                 raise
             _LOGGER.info("GloBird session expired; attempting re-login")
             await self.authenticate(self._email, self._password)
@@ -537,7 +546,10 @@ class GloBirdClient:
 
         if not payload.get("success") or data.get("isLoginSucceeded") is False:
             self._authenticated = False
-            raise GloBirdAuthError("Invalid GloBird email or password")
+            portal_msg = payload.get("message") or data.get("message") or ""
+            raise GloBirdAuthError(
+                f"Invalid GloBird email or password{f': {portal_msg}' if portal_msg else ''}"
+            )
 
         access_token = data.get("accessToken")
         if isinstance(access_token, str) and access_token:
