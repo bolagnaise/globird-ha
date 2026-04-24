@@ -186,7 +186,12 @@ def select_meter_for_service(
 def _build_register_summary(
     rows: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Summarise a list of usage rows for a single register (E1 or B1)."""
+    """Summarise a list of usage rows for a single register (E1 or B1).
+
+    Each day has multiple rows (one per time-of-use period). Group by date
+    so that daily totals and latest_day_usage are correct sums, not a single
+    time-of-use period's value.
+    """
     if not rows:
         return {
             "days": 0,
@@ -197,37 +202,50 @@ def _build_register_summary(
             "latest_intervals": [],
         }
 
-    daily: list[dict[str, Any]] = []
-    total = 0.0
-    latest_row: dict[str, Any] | None = None
-
+    # Group rows by date
+    by_date: dict[str, dict[str, Any]] = {}
     for row in rows:
+        d = row.get("readDate") or ""
         usage = _as_float(row.get("usage")) or 0.0
-        total += usage
-        daily.append(
-            {
-                "readDate": row.get("readDate"),
-                "usage": _round(usage),
-                "chargeType": row.get("chargeType"),
-                "chargeCategoryCode": row.get("chargeCategoryCode"),
+        if d not in by_date:
+            by_date[d] = {
+                "readDate": d,
+                "usage": 0.0,
                 "meterStatus": row.get("meterStatus"),
                 "minQualityMethod": row.get("minQualityMethod"),
+                "intervals": None,
             }
-        )
-        if latest_row is None or _date_key(row, "readDate") >= _date_key(latest_row, "readDate"):
-            latest_row = row
+        by_date[d]["usage"] += usage
+        # Element-wise sum of usageArrays across all time-of-use periods for the day
+        arr = row.get("usageArray")
+        if isinstance(arr, list) and arr:
+            existing = by_date[d]["intervals"]
+            if existing is None:
+                by_date[d]["intervals"] = list(arr)
+            else:
+                for i, v in enumerate(arr):
+                    if i < len(existing):
+                        existing[i] = (_as_float(existing[i]) or 0.0) + (_as_float(v) or 0.0)
+
+    total = sum(v["usage"] for v in by_date.values())
+    latest_date = max(by_date) if by_date else None
+    latest_entry = by_date[latest_date] if latest_date else None
+
+    daily = [
+        {"readDate": v["readDate"], "usage": _round(v["usage"]),
+         "meterStatus": v["meterStatus"], "minQualityMethod": v["minQualityMethod"]}
+        for v in sorted(by_date.values(), key=lambda x: x["readDate"])
+    ]
 
     latest_intervals: list[Any] = []
-    if latest_row:
-        values = latest_row.get("usageArray")
-        if isinstance(values, list):
-            latest_intervals = [_round(_as_float(v), 5) for v in values]
+    if latest_entry and isinstance(latest_entry["intervals"], list):
+        latest_intervals = [_round(_as_float(v), 5) for v in latest_entry["intervals"]]
 
     return {
-        "days": len(daily),
+        "days": len(by_date),
         "total": _round(total),
-        "latest_day": latest_row.get("readDate") if latest_row else None,
-        "latest_day_usage": _round(_as_float(latest_row.get("usage"))) if latest_row else None,
+        "latest_day": latest_date,
+        "latest_day_usage": _round(latest_entry["usage"]) if latest_entry else None,
         "daily": daily,
         "latest_intervals": latest_intervals,
     }
