@@ -65,4 +65,3 @@ Detailed daily summaries and the latest interval array are exposed as sensor att
 
 - This is read-only. It does not pay bills, submit meter reads, edit account details, or download PDFs.
 - Captcha-required logins are reported as unsupported because they require browser interaction.
-- The GloBird portal HAR used to identify endpoints is intentionally not included in this repository.
