@@ -417,10 +417,25 @@ class GloBirdClient:
                 method, path, json_data=json_data, timeout=timeout
             )
 
+    async def _establish_session(self) -> None:
+        """GET the portal homepage to obtain the session cookie required before login."""
+        try:
+            async with self._session.request(
+                "GET",
+                self._base_url,
+                headers=self._headers(),
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as resp:
+                await resp.read()
+        except Exception:  # noqa: BLE001 - best-effort; login will surface any real error
+            pass
+
     async def authenticate(self, email: str, password: str) -> dict[str, Any]:
         """Authenticate and validate the portal session."""
         self._email = email
         self._password = password
+
+        await self._establish_session()
 
         payload = await self._raw_request_json(
             "POST",
