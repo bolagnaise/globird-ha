@@ -422,7 +422,14 @@ class GloBirdClient:
             )
 
     async def _establish_session(self) -> None:
-        """GET the portal homepage to obtain the session cookie required before login."""
+        """GET the portal homepage to obtain session and sticky-routing cookies.
+
+        The Azure ARRAffinity cookies are issued with Domain=globirdcustomerportalprod
+        .azurewebsites.net (the backend hostname), but all requests go to
+        myaccount.globirdenergy.com.au. aiohttp won't send cross-domain cookies, so
+        we copy ARRAffinity values into the cookie jar under the primary domain to
+        ensure all requests hit the same backend shard.
+        """
         try:
             async with self._session.request(
                 "GET",
@@ -431,6 +438,15 @@ class GloBirdClient:
                 timeout=aiohttp.ClientTimeout(total=15),
             ) as resp:
                 await resp.read()
+
+            primary = URL(self._base_url)
+            sticky = {
+                c.key: c.value
+                for c in self._session.cookie_jar
+                if "arraff" in c.key.lower()
+            }
+            if sticky:
+                self._session.cookie_jar.update_cookies(sticky, primary)
         except Exception:  # noqa: BLE001 - best-effort; login will surface any real error
             pass
 

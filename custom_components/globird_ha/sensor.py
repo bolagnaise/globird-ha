@@ -244,6 +244,7 @@ class GloBirdGlobalSensor(GloBirdBaseSensor):
     ) -> None:
         """Initialize the sensor."""
         super().__init__(coordinator, config_entry)
+        self._description = description
         self._attr_name = description.name
         self._attr_unique_id = f"{config_entry.entry_id}_{description.key}"
         self._attr_native_unit_of_measurement = description.native_unit_of_measurement
@@ -260,12 +261,12 @@ class GloBirdGlobalSensor(GloBirdBaseSensor):
     @property
     def native_value(self) -> Any:
         """Return the sensor value."""
-        return self.entity_description.value_fn(self.coordinator.data or {})
+        return self._description.value_fn(self.coordinator.data or {})
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return sensor attributes."""
-        attrs_fn = self.entity_description.attrs_fn
+        attrs_fn = self._description.attrs_fn
         return attrs_fn(self.coordinator.data or {}) if attrs_fn else {}
 
 
@@ -480,7 +481,7 @@ class GloBirdCostTotalSensor(GloBirdServiceBaseSensor):
     icon = "mdi:cash-multiple"
     native_unit_of_measurement = CURRENCY_AUD
     device_class = SensorDeviceClass.MONETARY
-    state_class = SensorStateClass.MEASUREMENT
+    state_class = None
 
     @property
     def native_value(self) -> Any:
@@ -511,7 +512,7 @@ class GloBirdLatestDayCostSensor(GloBirdServiceBaseSensor):
     icon = "mdi:calendar-cash"
     native_unit_of_measurement = CURRENCY_AUD
     device_class = SensorDeviceClass.MONETARY
-    state_class = SensorStateClass.MEASUREMENT
+    state_class = None
 
     @property
     def native_value(self) -> Any:
