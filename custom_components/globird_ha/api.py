@@ -149,18 +149,38 @@ def select_meter_for_service(
     meters_payload: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
     """Select the best available meter row for a service."""
-    meters = _payload_data(meters_payload)
-    if not isinstance(meters, list) or not meters:
+    raw = _payload_data(meters_payload)
+
+    # API may return the list directly or wrapped in a nested dict
+    if isinstance(raw, list):
+        meters: list[dict[str, Any]] = raw
+    elif isinstance(raw, dict):
+        meters = []
+        for key in ("data", "meters", "items", "readMeters"):
+            val = raw.get(key)
+            if isinstance(val, list):
+                meters = val
+                break
+    else:
         return None
 
+    if not meters:
+        return None
+
+    identifier = str(service.get("siteIdentifier") or "")
+    if identifier:
+        matched = [
+            m for m in meters
+            if str(m.get("siteIdentifier") or m.get("nmi") or "") == identifier
+        ]
+        if matched:
+            meters = matched
+
     active_meters = [
-        meter
-        for meter in meters
-        if str(meter.get("serialStatus") or "").lower() in ("", "active", "current")
+        m for m in meters
+        if str(m.get("serialStatus") or "").lower() in ("", "active", "current")
     ]
-    if active_meters:
-        return active_meters[0]
-    return meters[0]
+    return active_meters[0] if active_meters else meters[0]
 
 
 def build_usage_summary(

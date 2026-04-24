@@ -202,7 +202,7 @@ class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         meter = select_meter_for_service(service, meters_payload)
         identifier = service.get("siteIdentifier")
         serial_number = meter.get("serialNumber") if meter else None
-        meter_read_type = str(meter.get("meterReadType") if meter else "")
+        meter_read_type = str(meter.get("meterReadType") or "" if meter else "")
         is_smart = meter_read_type.lower() != "basic"
         account_service_id = service.get("accountServiceId")
 

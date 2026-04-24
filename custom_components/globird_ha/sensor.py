@@ -253,7 +253,7 @@ class GloBirdGlobalSensor(GloBirdBaseSensor):
         self._attr_icon = description.icon
         self._attr_device_info = {
             "identifiers": {(DOMAIN, config_entry.entry_id)},
-            "name": "GloBird",
+            "name": "GloBird Energy",
             "manufacturer": "GloBird Energy",
             "model": "Customer Portal",
         }
@@ -282,16 +282,16 @@ class GloBirdAccountSummarySensor(GloBirdBaseSensor):
         """Initialize the sensor."""
         super().__init__(coordinator, config_entry)
         self._account_id = str(account.get("accountId") or account.get("accountNumber"))
-        self._attr_name = "Account Summary"
+        self._attr_name = f"Account {account.get('accountNumber') or self._account_id}"
         self._attr_icon = "mdi:account"
         self._attr_unique_id = (
             f"{config_entry.entry_id}_account_{self._account_id}_summary"
         )
         self._attr_device_info = {
-            "identifiers": {(DOMAIN, f"{config_entry.entry_id}_account_{self._account_id}")},
-            "name": f"GloBird Account {account.get('accountNumber') or self._account_id}",
+            "identifiers": {(DOMAIN, config_entry.entry_id)},
+            "name": "GloBird Energy",
             "manufacturer": "GloBird Energy",
-            "model": "Electricity Account",
+            "model": "Customer Portal",
         }
 
     def _account(self) -> dict[str, Any]:
@@ -341,10 +341,10 @@ class GloBirdServiceBaseSensor(GloBirdBaseSensor):
         self._attr_device_class = self.device_class
         self._attr_state_class = self.state_class
         self._attr_device_info = {
-            "identifiers": {(DOMAIN, f"{config_entry.entry_id}_service_{self._service_id}")},
-            "name": f"GloBird Service {self._service_id}",
+            "identifiers": {(DOMAIN, config_entry.entry_id)},
+            "name": "GloBird Energy",
             "manufacturer": "GloBird Energy",
-            "model": "Electricity Service",
+            "model": "Customer Portal",
         }
 
     def _service_detail(self) -> dict[str, Any]:
