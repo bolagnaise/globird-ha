@@ -465,7 +465,7 @@ class GloBirdClient:
             if not retry_auth or not self._reauth_enabled or not self._email or not self._password:
                 raise
             _LOGGER.info("GloBird session expired; attempting re-login")
-            await self.authenticate(self._email, self._password)
+            await self.authenticate(self._email, self._password, fresh_session=False)
             return await self._raw_request_json(
                 method, path, json_data=json_data, timeout=timeout
             )
@@ -520,12 +520,15 @@ class GloBirdClient:
         )
         return base64.b64encode(encrypted).decode("utf-8")
 
-    async def authenticate(self, email: str, password: str) -> dict[str, Any]:
+    async def authenticate(
+        self, email: str, password: str, *, fresh_session: bool = True
+    ) -> dict[str, Any]:
         """Authenticate and validate the portal session."""
         self._email = email
         self._password = password
 
-        await self._establish_session()
+        if fresh_session:
+            await self._establish_session()
         encrypted_password = await self._encrypt_password(password)
 
         payload = await self._raw_request_json(
@@ -540,6 +543,15 @@ class GloBirdClient:
         )
         data = _payload_data(payload) or {}
 
+        _LOGGER.debug(
+            "GloBird login response keys: success=%s isLoginSucceeded=%s captcha=%s/%s msg=%s",
+            payload.get("success"),
+            data.get("isLoginSucceeded"),
+            data.get("requireRetryCaptCha"),
+            data.get("requireHCaptcha"),
+            payload.get("message") or data.get("message"),
+        )
+
         if data.get("requireRetryCaptCha") or data.get("requireHCaptcha"):
             self._authenticated = False
             raise GloBirdCaptchaRequired("GloBird requested captcha verification")
@@ -548,7 +560,7 @@ class GloBirdClient:
             self._authenticated = False
             portal_msg = payload.get("message") or data.get("message") or ""
             raise GloBirdAuthError(
-                f"Invalid GloBird email or password{f': {portal_msg}' if portal_msg else ''}"
+                f"GloBird login failed{f': {portal_msg}' if portal_msg else ''}"
             )
 
         access_token = data.get("accessToken")

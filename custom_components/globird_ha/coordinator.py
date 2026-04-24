@@ -109,10 +109,14 @@ class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         try:
             if self.client.is_authenticated and self.client.access_token is None:
-                # Cookies are valid but the Bearer token was lost (e.g. after HA restart).
-                # Re-authenticate once to recover the token; fall back to cookie-only on failure.
+                # Cookies are valid but the Bearer token was lost or expired.
+                # Re-authenticate without resetting the session (fresh_session=False) so the
+                # existing ARRAffinity routing cookie is preserved and the login POST hits
+                # the same backend shard as the active session.
                 try:
-                    current_user = await self.client.authenticate(self.email, self.password)
+                    current_user = await self.client.authenticate(
+                        self.email, self.password, fresh_session=False
+                    )
                 except Exception as err:  # noqa: BLE001
                     _LOGGER.warning("GloBird token refresh failed (%s); continuing with cookies only", err)
                     current_user = await self.client.get_current_user()
