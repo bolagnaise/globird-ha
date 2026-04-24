@@ -73,11 +73,21 @@ class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._cache = loaded_cache if isinstance(loaded_cache, dict) else None
         cookie_state = await self._cookie_store.async_load()
         cookies = cookie_state.get("cookies", []) if isinstance(cookie_state, dict) else []
+        stored_token = cookie_state.get("access_token") if isinstance(cookie_state, dict) else None
         if isinstance(cookies, list) and cookies:
             self.client.import_session_cookies(cookies)
             restored = await self.client.restore_session(self.email, self.password)
             if restored is not None:
-                _LOGGER.info("GloBird session restored from persisted cookies")
+                if stored_token:
+                    self.client.set_access_token(stored_token)
+                    _LOGGER.info("GloBird session restored from persisted cookies and token")
+                else:
+                    # No persisted token — re-authenticate to obtain a fresh one
+                    _LOGGER.info("GloBird cookies valid but no access token; re-authenticating")
+                    try:
+                        await self.client.authenticate(self.email, self.password)
+                    except Exception as err:  # noqa: BLE001
+                        _LOGGER.warning("GloBird re-auth for token failed: %s", err)
 
         self._initialized = True
 
@@ -171,9 +181,10 @@ class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
             self._cache = data
             await self._cache_store.async_save(data)
-            await self._cookie_store.async_save(
-                {"cookies": self.client.export_session_cookies()}
-            )
+            await self._cookie_store.async_save({
+                "cookies": self.client.export_session_cookies(),
+                "access_token": self.client.access_token,
+            })
             return data
 
         except Exception as err:  # noqa: BLE001 - coordinator should preserve cache.

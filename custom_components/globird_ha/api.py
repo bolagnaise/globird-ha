@@ -369,6 +369,15 @@ class GloBirdClient:
         """Return whether this client believes it has an active session."""
         return self._authenticated
 
+    @property
+    def access_token(self) -> str | None:
+        """Return the current Bearer access token."""
+        return self._access_token
+
+    def set_access_token(self, token: str) -> None:
+        """Restore a previously persisted access token."""
+        self._access_token = token
+
     async def close(self) -> None:
         """Close the owned HTTP session."""
         if self._owns_session and not self._session.closed:
