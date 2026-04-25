@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from typing import Any, Callable
 
 from homeassistant.components.sensor import (
@@ -45,7 +46,9 @@ def _recent_transactions(data: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _balance_value(data: dict[str, Any]) -> Any:
     balance = _payload_data(data.get("balance")) or {}
-    return balance.get("balance")
+    val = balance.get("balance")
+    # GloBird returns positive for credit; negate so credit=negative, debt=positive
+    return -val if val is not None else None
 
 
 def _balance_attrs(data: dict[str, Any]) -> dict[str, Any]:
@@ -58,7 +61,8 @@ def _balance_attrs(data: dict[str, Any]) -> dict[str, Any]:
 
 def _dashboard_balance_value(data: dict[str, Any]) -> Any:
     dashboard = _payload_data(data.get("dashboard")) or {}
-    return dashboard.get("currentBalance")
+    val = dashboard.get("currentBalance")
+    return -val if val is not None else None
 
 
 def _dashboard_attrs(data: dict[str, Any]) -> dict[str, Any]:
@@ -170,6 +174,8 @@ async def async_setup_entry(
                 GloBirdLatestDaySolarExportSensor(coordinator, config_entry, service),
                 GloBirdCostTotalSensor(coordinator, config_entry, service),
                 GloBirdLatestDayCostSensor(coordinator, config_entry, service),
+                GloBirdBillingPeriodDaysSensor(coordinator, config_entry, service),
+                GloBirdBillingPeriodCostSensor(coordinator, config_entry, service),
                 GloBirdWeatherSummarySensor(coordinator, config_entry, service),
             ]
         )
@@ -540,6 +546,78 @@ class GloBirdLatestDayCostSensor(GloBirdServiceBaseSensor):
         attrs = self._service_attrs()
         summary = self._service_detail().get("cost_summary") or {}
         attrs["latest_day"] = summary.get("latest_day")
+        return attrs
+
+
+def _billing_period_start(data: dict[str, Any]) -> date | None:
+    """Return the start date of the current billing period (latest invoice issue date)."""
+    dashboard = _payload_data(data.get("dashboard")) or {}
+    invoice = dashboard.get("lastestInvoice") or {}
+    issued = invoice.get("issuedDate")
+    if not issued:
+        return None
+    try:
+        return date.fromisoformat(str(issued).split("T")[0])
+    except ValueError:
+        return None
+
+
+class GloBirdBillingPeriodDaysSensor(GloBirdServiceBaseSensor):
+    """Number of days elapsed in the current billing period."""
+
+    sensor_key = "billing_period_days"
+    sensor_name = "Billing Period Days"
+    icon = "mdi:calendar-range"
+
+    @property
+    def native_value(self) -> Any:
+        """Return days elapsed since billing period start."""
+        start = _billing_period_start(self.coordinator.data or {})
+        if start is None:
+            return None
+        return (date.today() - start).days + 1
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return billing period attributes."""
+        attrs = self._service_attrs()
+        start = _billing_period_start(self.coordinator.data or {})
+        attrs["billing_period_start"] = start.isoformat() if start else None
+        return attrs
+
+
+class GloBirdBillingPeriodCostSensor(GloBirdServiceBaseSensor):
+    """Cost so far in the current billing period."""
+
+    sensor_key = "billing_period_cost"
+    sensor_name = "Billing Period Cost"
+    icon = "mdi:cash-clock"
+    native_unit_of_measurement = CURRENCY_AUD
+    device_class = SensorDeviceClass.MONETARY
+
+    @property
+    def native_value(self) -> Any:
+        """Return net cost since billing period start."""
+        start = _billing_period_start(self.coordinator.data or {})
+        daily = (self._service_detail().get("cost_summary") or {}).get("daily", [])
+        if not daily:
+            return None
+        if start is None:
+            return (self._service_detail().get("cost_summary") or {}).get("total_amount")
+        start_slash = start.strftime("%Y/%m/%d")
+        total = sum(
+            (row.get("amount") or 0.0)
+            for row in daily
+            if str(row.get("date") or "") >= start_slash
+        )
+        return round(total, 2)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return billing period cost attributes."""
+        attrs = self._service_attrs()
+        start = _billing_period_start(self.coordinator.data or {})
+        attrs["billing_period_start"] = start.isoformat() if start else None
         return attrs
 
 
