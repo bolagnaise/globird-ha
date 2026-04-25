@@ -522,7 +522,7 @@ class GloBirdLatestDayCostSensor(GloBirdServiceBaseSensor):
 
     sensor_key = "latest_day_cost"
     sensor_name = "Latest Daily Cost"
-    icon = "mdi:calendar-cash"
+    icon = "mdi:calendar-today"
     native_unit_of_measurement = CURRENCY_AUD
     device_class = SensorDeviceClass.MONETARY
     state_class = None
