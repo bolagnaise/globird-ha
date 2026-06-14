@@ -208,15 +208,38 @@ class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     cached_detail if isinstance(cached_detail, dict) else {},
                 )
                 usage_summary = fresh_detail.get("usage_summary") or {}
-                if not _is_usage_complete(usage_summary) and isinstance(cached_detail, dict):
-                    # Neither import nor export has a non-zero value for the latest
-                    # day — data is not yet fully published.  Retain the previously
-                    # confirmed service data so sensors do not update with partial values.
+                cost_summary = fresh_detail.get("cost_summary") or {}
+                cost_day = cost_summary.get("latest_day")
+                usage_day = usage_summary.get("latest_day")
+
+                # Hold back the entire service detail until both usage and cost
+                # data are fully published and aligned.  This ensures all service
+                # sensors — usage totals, cost totals, billing period, ZeroHero,
+                # weather, etc. — update together at the same time as
+                # latest_data_date rather than in separate waves.
+                #
+                # Two conditions trigger the hold-back (either is sufficient):
+                #   1. Usage incomplete: both latest_day_usage and latest_day_export
+                #      are zero/absent — GloBird has posted the new day stub but
+                #      real meter reads have not yet landed.
+                #   2. Cost ahead of usage: GloBird sometimes publishes provisional
+                #      cost for the new day before usage meter reads are finalised,
+                #      advancing cost_summary.latest_day ahead of usage_summary.
+                #      Accepting fresh data in this state would update cost sensors
+                #      with provisional figures an hour or more early.
+                cost_is_ahead = bool(cost_day and usage_day and cost_day > usage_day)
+                should_hold = not _is_usage_complete(usage_summary) or cost_is_ahead
+
+                if should_hold and isinstance(cached_detail, dict):
                     _LOGGER.debug(
-                        "GloBird service %s: usage data incomplete "
-                        "(latest_day=%s, import=%s, export=%s); retaining cached data.",
+                        "GloBird service %s: holding back update "
+                        "(usage_complete=%s, cost_ahead=%s, "
+                        "usage_day=%s, cost_day=%s, import=%s, export=%s).",
                         sid,
-                        usage_summary.get("latest_day"),
+                        _is_usage_complete(usage_summary),
+                        cost_is_ahead,
+                        usage_day,
+                        cost_day,
                         usage_summary.get("latest_day_usage"),
                         usage_summary.get("latest_day_export"),
                     )
