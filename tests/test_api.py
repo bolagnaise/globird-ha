@@ -33,9 +33,11 @@ build_usage_summary = api.build_usage_summary
 build_weather_summary = api.build_weather_summary
 cost_attributes = api.cost_attributes
 extract_accounts_and_services = api.extract_accounts_and_services
+merge_usage_payloads = api.merge_usage_payloads
 redact_sensitive = api.redact_sensitive
 select_meter_for_service = api.select_meter_for_service
 usage_attributes = api.usage_attributes
+usage_requires_history_fallback = api.usage_requires_history_fallback
 
 
 def load_fixtures() -> dict[str, Any]:
@@ -372,6 +374,94 @@ def test_select_meter_prefers_smart_when_status_unknown() -> None:
     assert meter["meterReadType"] == "SMART"
 
 
+def test_usage_requires_history_fallback_when_earliest_date_too_recent() -> None:
+    """Fallback should trigger when the earliest usage date misses window start."""
+    payload = {
+        "data": [
+            {
+                "readDate": "2026/06/20",
+                "usage": 1.0,
+                "suffix": "E1",
+                "chargeType": "Peak Usage",
+                "chargeCategoryCode": "USAGE",
+            }
+        ],
+        "success": True,
+    }
+
+    assert usage_requires_history_fallback(
+        payload,
+        days=31,
+        today=date(2026, 6, 22),
+    ) is True
+
+
+def test_usage_requires_history_fallback_false_for_covered_window() -> None:
+    """Fallback should not trigger when usage starts near the requested window."""
+    payload = {
+        "data": [
+            {
+                "readDate": "2026/05/22",
+                "usage": 1.0,
+                "suffix": "E1",
+                "chargeType": "Peak Usage",
+                "chargeCategoryCode": "USAGE",
+            }
+        ],
+        "success": True,
+    }
+
+    assert usage_requires_history_fallback(
+        payload,
+        days=31,
+        today=date(2026, 6, 22),
+    ) is False
+
+
+def test_merge_usage_payloads_combines_and_deduplicates_rows() -> None:
+    """Merging usage payloads should keep unique rows and preserve chronological order."""
+    primary = {
+        "data": [
+            {
+                "readDate": "2026/06/20",
+                "suffix": "E1",
+                "chargeType": "Peak Usage",
+                "chargeCategoryCode": "USAGE",
+                "serial": "SMART1",
+                "usage": 2.0,
+            }
+        ],
+        "success": True,
+    }
+    fallback = {
+        "data": [
+            {
+                "readDate": "2026/06/18",
+                "suffix": "E1",
+                "chargeType": "Peak Usage",
+                "chargeCategoryCode": "USAGE",
+                "serial": "BASIC1",
+                "usage": 1.0,
+            },
+            {
+                "readDate": "2026/06/20",
+                "suffix": "E1",
+                "chargeType": "Peak Usage",
+                "chargeCategoryCode": "USAGE",
+                "serial": "SMART1",
+                "usage": 2.0,
+            },
+        ],
+        "success": True,
+    }
+
+    merged = merge_usage_payloads(primary, fallback)
+
+    assert merged is not None
+    assert [row["readDate"] for row in merged["data"]] == ["2026/06/18", "2026/06/20"]
+    assert len(merged["data"]) == 2
+
+
 def test_cost_summary_exposes_new_category_totals() -> None:
     """Cost summaries preserve newer GloBird categories separately."""
     payload = {
@@ -547,6 +637,9 @@ def load_tests(
         test_usage_summary_tracks_all_registers_and_b_exports,
         test_select_meter_prefers_energized_smart_over_removed_basic,
         test_select_meter_prefers_smart_when_status_unknown,
+        test_usage_requires_history_fallback_when_earliest_date_too_recent,
+        test_usage_requires_history_fallback_false_for_covered_window,
+        test_merge_usage_payloads_combines_and_deduplicates_rows,
         test_cost_summary_exposes_new_category_totals,
         test_cost_summary_projects_current_month_cost,
         test_sensor_attributes_are_recorder_safe_summaries,

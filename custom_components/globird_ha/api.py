@@ -260,11 +260,11 @@ def service_id(service: dict[str, Any]) -> str:
     return str(value or "unknown")
 
 
-def select_meter_for_service(
+def meters_for_service(
     service: dict[str, Any],
     meters_payload: dict[str, Any] | None,
-) -> dict[str, Any] | None:
-    """Select the best available meter row for a service."""
+) -> list[dict[str, Any]]:
+    """Return candidate meter rows for a service."""
     raw = _payload_data(meters_payload)
 
     # API may return the list directly or wrapped in a nested dict
@@ -278,19 +278,106 @@ def select_meter_for_service(
                 meters = val
                 break
     else:
-        return None
+        return []
 
     if not meters:
-        return None
+        return []
 
     identifier = str(service.get("siteIdentifier") or "")
     if identifier:
         matched = [
-            m for m in meters
+            m
+            for m in meters
             if str(m.get("siteIdentifier") or m.get("nmi") or "") == identifier
         ]
         if matched:
-            meters = matched
+            return matched
+
+    return meters
+
+
+def usage_requires_history_fallback(
+    usage_payload: dict[str, Any] | None,
+    *,
+    days: int,
+    grace_days: int = 2,
+    today: date | None = None,
+) -> bool:
+    """Return whether usage data appears to be missing early days in the window."""
+    rows = _payload_data(usage_payload)
+    if not isinstance(rows, list) or not rows:
+        return True
+
+    read_dates = {
+        parsed
+        for parsed in (_parse_date(row.get("readDate")) for row in rows)
+        if parsed is not None
+    }
+    if not read_dates:
+        return False
+
+    today = today or date.today()
+    expected_start = today - timedelta(days=days)
+    earliest = min(read_dates)
+    return earliest > (expected_start + timedelta(days=grace_days))
+
+
+def merge_usage_payloads(
+    primary: dict[str, Any] | None,
+    secondary: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Merge two usage payloads and de-duplicate overlapping rows."""
+    if not isinstance(primary, dict):
+        return secondary if isinstance(secondary, dict) else primary
+    if not isinstance(secondary, dict):
+        return primary
+
+    primary_rows = _payload_data(primary)
+    secondary_rows = _payload_data(secondary)
+    if not isinstance(primary_rows, list) or not isinstance(secondary_rows, list):
+        return primary
+
+    merged = dict(primary)
+    seen: set[tuple[str, str, str, str, str, str]] = set()
+    combined: list[dict[str, Any]] = []
+
+    for row in [*primary_rows, *secondary_rows]:
+        if not isinstance(row, dict):
+            continue
+        key = (
+            str(row.get("readDate") or ""),
+            str(row.get("suffix") or ""),
+            str(row.get("chargeType") or ""),
+            str(row.get("chargeCategoryCode") or ""),
+            str(row.get("serial") or ""),
+            str(row.get("usage") or ""),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        combined.append(row)
+
+    combined.sort(
+        key=lambda row: (
+            _parse_date(row.get("readDate")) or date.min,
+            str(row.get("suffix") or ""),
+            str(row.get("chargeType") or ""),
+        )
+    )
+
+    merged["data"] = combined
+    merged["success"] = bool(primary.get("success", True) and secondary.get("success", True))
+    return merged
+
+
+def select_meter_for_service(
+    service: dict[str, Any],
+    meters_payload: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Select the best available meter row for a service."""
+    meters = meters_for_service(service, meters_payload)
+    if not meters:
+        return None
 
     def _status_value(row: dict[str, Any]) -> str:
         return str(row.get("serialStatus") or "").strip().lower()

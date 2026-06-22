@@ -16,8 +16,11 @@ from .api import (
     build_usage_summary,
     build_weather_summary,
     extract_accounts_and_services,
+    merge_usage_payloads,
+    meters_for_service,
     select_meter_for_service,
     service_id,
+    usage_requires_history_fallback,
 )
 from .const import (
     ACCOUNT_UPDATE_INTERVAL,
@@ -220,12 +223,14 @@ class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         service_status = status_map.get(sid) if isinstance(status_map, dict) else None
 
+        all_meters = meters_for_service(service, meters_payload)
         meter = select_meter_for_service(service, meters_payload)
         identifier = service.get("siteIdentifier")
         serial_number = meter.get("serialNumber") if meter else None
         meter_read_type = str(meter.get("meterReadType") or "" if meter else "")
         is_smart = meter_read_type.lower() != "basic"
         account_service_id = service.get("accountServiceId")
+        usage_meter_serials: list[str] = [str(serial_number)] if serial_number else []
 
         usage = None
         if identifier and serial_number:
@@ -240,6 +245,50 @@ class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 ),
                 cache,
             )
+
+            if usage_requires_history_fallback(usage, days=DEFAULT_USAGE_DAYS):
+                selected_serial = str(serial_number)
+                removed_statuses = {
+                    "removed",
+                    "inactive",
+                    "retired",
+                    "deenergized",
+                }
+
+                removed_meters = [
+                    candidate
+                    for candidate in all_meters
+                    if str(candidate.get("serialNumber") or "") != selected_serial
+                    and str(candidate.get("serialStatus") or "").strip().lower() in removed_statuses
+                ]
+
+                for fallback_meter in removed_meters:
+                    fallback_serial = str(fallback_meter.get("serialNumber") or "")
+                    if not fallback_serial:
+                        continue
+
+                    fallback_is_smart = (
+                        str(fallback_meter.get("meterReadType") or "").strip().lower() != "basic"
+                    )
+                    fallback_usage = await self._fetch_optional(
+                        f"usage_fallback_{fallback_serial}",
+                        lambda: self.client.get_usage(
+                            identifier=str(identifier),
+                            serial_number=fallback_serial,
+                            account_service_id=account_service_id,
+                            is_smart=fallback_is_smart,
+                            days=DEFAULT_USAGE_DAYS,
+                        ),
+                        cache,
+                    )
+                    usage = merge_usage_payloads(usage, fallback_usage)
+                    usage_meter_serials.append(fallback_serial)
+
+                    if not usage_requires_history_fallback(
+                        usage,
+                        days=DEFAULT_USAGE_DAYS,
+                    ):
+                        break
 
         cost = None
         if identifier and account_service_id:
@@ -271,6 +320,8 @@ class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "service": service,
             "status": service_status,
             "meter": meter,
+            "usage_meter_serials": usage_meter_serials,
+            "usage_fallback_applied": len(usage_meter_serials) > 1,
             "usage": usage,
             "usage_summary": build_usage_summary(usage),
             "cost": cost,
