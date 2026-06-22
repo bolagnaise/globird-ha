@@ -16,11 +16,27 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .api import cost_attributes, service_id, usage_attributes
+from .api import (
+    build_latest_data_status,
+    cost_attributes,
+    service_id,
+    usage_attributes,
+)
 from .const import DOMAIN
 from .coordinator import GloBirdCoordinator
 
 CURRENCY_AUD = "AUD"
+
+
+def _latest_data_status(detail: dict[str, Any]) -> dict[str, Any]:
+    """Return cached or computed latest data readiness."""
+    status = detail.get("latest_data_status")
+    if isinstance(status, dict):
+        return status
+    return build_latest_data_status(
+        detail.get("usage_summary") or {},
+        detail.get("cost_summary") or {},
+    )
 
 
 def _payload_data(payload: dict[str, Any] | None) -> Any:
@@ -215,6 +231,7 @@ async def async_setup_entry(
                 GloBirdServiceStatusSensor(coordinator, config_entry, service),
                 GloBirdMeterInfoSensor(coordinator, config_entry, service),
                 GloBirdLatestDataDateSensor(coordinator, config_entry, service),
+                GloBirdLatestDataStatusSensor(coordinator, config_entry, service),
                 GloBirdUsageTotalSensor(coordinator, config_entry, service),
                 GloBirdLatestDayUsageSensor(coordinator, config_entry, service),
                 GloBirdSolarExportTotalSensor(coordinator, config_entry, service),
@@ -423,7 +440,7 @@ class GloBirdMeterInfoSensor(GloBirdServiceBaseSensor):
 
 
 class GloBirdLatestDataDateSensor(GloBirdServiceBaseSensor):
-    """Latest complete portal data date for a service."""
+    """Latest service data date ready for daily automations."""
 
     sensor_key = "latest_data_date"
     sensor_name = "Latest Data Date"
@@ -431,31 +448,64 @@ class GloBirdLatestDataDateSensor(GloBirdServiceBaseSensor):
 
     @property
     def native_value(self) -> Any:
-        """Return the latest complete cost date, falling back to usage date."""
-        detail = self._service_detail()
-        cost_summary = detail.get("cost_summary") or {}
-        usage_summary = detail.get("usage_summary") or {}
-        return cost_summary.get("latest_day") or usage_summary.get("latest_day")
+        """Return the latest date with aligned usage and cost data."""
+        return _latest_data_status(self._service_detail()).get("latest_ready_day")
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return latest data status attributes."""
         attrs = self._service_attrs()
         detail = self._service_detail()
-        cost_summary = detail.get("cost_summary") or {}
-        usage_summary = detail.get("usage_summary") or {}
+        latest_status = _latest_data_status(detail)
         attrs.update(
             {
-                "latest_usage_day": usage_summary.get("latest_day"),
-                "latest_cost_day": cost_summary.get("latest_day"),
-                "latest_available_cost_day": cost_summary.get("latest_available_day"),
-                "latest_available_cost_day_complete": cost_summary.get(
-                    "latest_available_day_complete"
+                "status": latest_status.get("status"),
+                "latest_usage_day": latest_status.get("latest_usage_day"),
+                "latest_cost_day": latest_status.get("latest_cost_day"),
+                "latest_available_cost_day": latest_status.get(
+                    "latest_available_cost_day"
                 ),
-                "incomplete_cost_days": cost_summary.get("incomplete_days", []),
+                "latest_available_cost_day_complete": latest_status.get(
+                    "latest_available_cost_day_complete"
+                ),
+                "incomplete_cost_days": latest_status.get("incomplete_cost_days", []),
                 "last_successful_refresh": _timestamp_attr(
                     (self.coordinator.data or {}).get("last_update")
                 ),
+            }
+        )
+        return attrs
+
+
+class GloBirdLatestDataStatusSensor(GloBirdServiceBaseSensor):
+    """Latest service data readiness status."""
+
+    sensor_key = "latest_data_status"
+    sensor_name = "Latest Data Status"
+    icon = "mdi:calendar-sync"
+
+    @property
+    def native_value(self) -> Any:
+        """Return whether the latest service data is ready."""
+        return _latest_data_status(self._service_detail()).get("status")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return latest data readiness attributes."""
+        attrs = self._service_attrs()
+        latest_status = _latest_data_status(self._service_detail())
+        attrs.update(
+            {
+                "latest_ready_day": latest_status.get("latest_ready_day"),
+                "latest_usage_day": latest_status.get("latest_usage_day"),
+                "latest_cost_day": latest_status.get("latest_cost_day"),
+                "latest_available_cost_day": latest_status.get(
+                    "latest_available_cost_day"
+                ),
+                "latest_available_cost_day_complete": latest_status.get(
+                    "latest_available_cost_day_complete"
+                ),
+                "incomplete_cost_days": latest_status.get("incomplete_cost_days", []),
             }
         )
         return attrs

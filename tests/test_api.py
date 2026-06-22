@@ -29,6 +29,7 @@ GloBirdCaptchaRequired = api.GloBirdCaptchaRequired
 GloBirdAuthError = api.GloBirdAuthError
 GloBirdClient = api.GloBirdClient
 build_cost_summary = api.build_cost_summary
+build_latest_data_status = api.build_latest_data_status
 build_usage_summary = api.build_usage_summary
 build_weather_summary = api.build_weather_summary
 cost_attributes = api.cost_attributes
@@ -280,6 +281,42 @@ def test_cost_summary_ignores_supply_only_partial_latest_day() -> None:
     assert cost["daily"] == [
         row for row in cost["available_daily"] if row["date"] == "2026/05/15"
     ]
+
+
+def test_latest_data_status_waits_for_cost_to_match_usage() -> None:
+    """Latest Data Date should not advance while cost lags usage."""
+    usage = {"latest_day": "2026-06-01"}
+    cost = {
+        "latest_day": "2026/05/31",
+        "latest_available_day": "2026/06/01",
+        "latest_available_day_complete": False,
+        "incomplete_days": ["2026/06/01"],
+    }
+
+    status = build_latest_data_status(usage, cost)
+
+    assert status["status"] == "waiting_for_cost"
+    assert status["latest_ready_day"] == "2026/05/31"
+    assert status["latest_usage_day"] == "2026-06-01"
+    assert status["latest_cost_day"] == "2026/05/31"
+    assert status["latest_available_cost_day"] == "2026/06/01"
+    assert status["incomplete_cost_days"] == ["2026/06/01"]
+
+
+def test_latest_data_status_ready_when_usage_and_cost_align() -> None:
+    """Latest data is ready once usage and complete cost dates agree."""
+    usage = {"latest_day": "2026-06-01"}
+    cost = {
+        "latest_day": "2026/06/01",
+        "latest_available_day": "2026/06/01",
+        "latest_available_day_complete": True,
+        "incomplete_days": [],
+    }
+
+    status = build_latest_data_status(usage, cost)
+
+    assert status["status"] == "ready"
+    assert status["latest_ready_day"] == "2026/06/01"
 
 
 def test_usage_summary_tracks_all_registers_and_b_exports() -> None:

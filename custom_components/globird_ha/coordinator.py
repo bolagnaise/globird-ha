@@ -13,6 +13,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .api import (
     GloBirdClient,
     build_cost_summary,
+    build_latest_data_status,
     build_usage_summary,
     build_weather_summary,
     extract_accounts_and_services,
@@ -267,14 +268,20 @@ class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 cache,
             )
 
+        usage_summary = build_usage_summary(usage)
+        cost_summary = build_cost_summary(cost)
+
         return {
             "service": service,
             "status": service_status,
             "meter": meter,
             "usage": usage,
-            "usage_summary": build_usage_summary(usage),
+            "usage_summary": usage_summary,
             "cost": cost,
-            "cost_summary": build_cost_summary(cost),
+            "cost_summary": cost_summary,
+            "latest_data_status": build_latest_data_status(
+                usage_summary, cost_summary
+            ),
             "weather": weather,
             "weather_summary": build_weather_summary(weather),
         }

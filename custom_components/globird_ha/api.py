@@ -551,6 +551,56 @@ def build_cost_summary(cost_payload: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
+def build_latest_data_status(
+    usage_summary: dict[str, Any] | None,
+    cost_summary: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Build readiness state for the latest complete service data date."""
+    usage_summary = usage_summary or {}
+    cost_summary = cost_summary or {}
+
+    latest_usage_day = usage_summary.get("latest_day")
+    latest_cost_day = cost_summary.get("latest_day")
+    latest_available_cost_day = cost_summary.get("latest_available_day")
+    latest_available_cost_day_complete = cost_summary.get(
+        "latest_available_day_complete"
+    )
+
+    usage_day = _parse_date(latest_usage_day)
+    cost_day = _parse_date(latest_cost_day)
+    available_cost_day = _parse_date(latest_available_cost_day)
+
+    latest_ready_day = latest_cost_day if cost_day else None
+    if usage_day and cost_day and cost_day > usage_day:
+        latest_ready_day = None
+
+    if not usage_day and not cost_day:
+        status = "no_data"
+    elif usage_day and (not cost_day or cost_day < usage_day):
+        status = "waiting_for_cost"
+    elif cost_day and usage_day and cost_day > usage_day:
+        status = "waiting_for_usage"
+    elif (
+        available_cost_day
+        and cost_day
+        and available_cost_day > cost_day
+        and latest_available_cost_day_complete is False
+    ):
+        status = "waiting_for_cost"
+    else:
+        status = "ready"
+
+    return {
+        "status": status,
+        "latest_ready_day": latest_ready_day,
+        "latest_usage_day": latest_usage_day,
+        "latest_cost_day": latest_cost_day,
+        "latest_available_cost_day": latest_available_cost_day,
+        "latest_available_cost_day_complete": latest_available_cost_day_complete,
+        "incomplete_cost_days": cost_summary.get("incomplete_days", []),
+    }
+
+
 def _build_projected_month_summary(
     daily: list[dict[str, Any]],
     today: date | None = None,

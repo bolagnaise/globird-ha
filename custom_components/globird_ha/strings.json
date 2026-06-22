@@ -52,6 +52,9 @@
       "latest_data_date": {
         "name": "Latest Data Date"
       },
+      "latest_data_status": {
+        "name": "Latest Data Status"
+      },
       "usage_total": {
         "name": "Recent Usage Total"
       },
