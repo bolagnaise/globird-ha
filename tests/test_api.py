@@ -418,6 +418,35 @@ def test_usage_requires_history_fallback_false_for_covered_window() -> None:
     ) is False
 
 
+def test_usage_requires_history_fallback_when_all_dates_unparseable() -> None:
+    """Fallback should trigger when rows exist but every readDate is unparseable."""
+    payload = {
+        "data": [
+            {
+                "readDate": None,
+                "usage": 1.0,
+                "suffix": "E1",
+                "chargeType": "Peak Usage",
+                "chargeCategoryCode": "USAGE",
+            },
+            {
+                "readDate": "not-a-date",
+                "usage": 2.0,
+                "suffix": "E1",
+                "chargeType": "Peak Usage",
+                "chargeCategoryCode": "USAGE",
+            },
+        ],
+        "success": True,
+    }
+
+    assert usage_requires_history_fallback(
+        payload,
+        days=31,
+        today=date(2026, 6, 22),
+    ) is True
+
+
 def test_merge_usage_payloads_combines_and_deduplicates_rows() -> None:
     """Merging usage payloads should keep unique rows and preserve chronological order."""
     primary = {
@@ -639,6 +668,7 @@ def load_tests(
         test_select_meter_prefers_smart_when_status_unknown,
         test_usage_requires_history_fallback_when_earliest_date_too_recent,
         test_usage_requires_history_fallback_false_for_covered_window,
+        test_usage_requires_history_fallback_when_all_dates_unparseable,
         test_merge_usage_payloads_combines_and_deduplicates_rows,
         test_cost_summary_exposes_new_category_totals,
         test_cost_summary_projects_current_month_cost,

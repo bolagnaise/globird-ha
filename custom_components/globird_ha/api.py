@@ -314,7 +314,8 @@ def usage_requires_history_fallback(
         if parsed is not None
     }
     if not read_dates:
-        return False
+        # All dates unparseable — treat the same as having no rows: trigger fallback.
+        return True
 
     today = today or date.today()
     expected_start = today - timedelta(days=days)
