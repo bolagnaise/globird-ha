@@ -34,6 +34,7 @@ build_weather_summary = api.build_weather_summary
 cost_attributes = api.cost_attributes
 extract_accounts_and_services = api.extract_accounts_and_services
 redact_sensitive = api.redact_sensitive
+select_meter_for_service = api.select_meter_for_service
 usage_attributes = api.usage_attributes
 
 
@@ -330,6 +331,47 @@ def test_usage_summary_tracks_all_registers_and_b_exports() -> None:
     assert usage["registers"][2]["chargeCategoryCode"] == "CONTROL"
 
 
+def test_select_meter_prefers_energized_smart_over_removed_basic() -> None:
+    """Meter selection should switch to an energized smart meter after upgrade."""
+    service = {"accountServiceId": 810964}
+    payload = {
+        "data": [
+            {
+                "meterReadType": "BASIC",
+                "serialNumber": "1180281",
+                "serialStatus": "Removed",
+            },
+            {
+                "meterReadType": "SMART",
+                "serialNumber": "LG12G055914",
+                "serialStatus": "Energized",
+            },
+        ]
+    }
+
+    meter = select_meter_for_service(service, payload)
+
+    assert meter is not None
+    assert meter["serialNumber"] == "LG12G055914"
+    assert meter["meterReadType"] == "SMART"
+
+
+def test_select_meter_prefers_smart_when_status_unknown() -> None:
+    """When statuses are empty, prefer the smart meter row."""
+    service = {"accountServiceId": 810964}
+    payload = {
+        "data": [
+            {"meterReadType": "BASIC", "serialNumber": "110563", "serialStatus": None},
+            {"meterReadType": "SMART", "serialNumber": "LG12G055914", "serialStatus": None},
+        ]
+    }
+
+    meter = select_meter_for_service(service, payload)
+
+    assert meter is not None
+    assert meter["meterReadType"] == "SMART"
+
+
 def test_cost_summary_exposes_new_category_totals() -> None:
     """Cost summaries preserve newer GloBird categories separately."""
     payload = {
@@ -503,6 +545,8 @@ def load_tests(
         test_cost_summary_net_daily_is_sum_not_last_row,
         test_cost_summary_ignores_supply_only_partial_latest_day,
         test_usage_summary_tracks_all_registers_and_b_exports,
+        test_select_meter_prefers_energized_smart_over_removed_basic,
+        test_select_meter_prefers_smart_when_status_unknown,
         test_cost_summary_exposes_new_category_totals,
         test_cost_summary_projects_current_month_cost,
         test_sensor_attributes_are_recorder_safe_summaries,

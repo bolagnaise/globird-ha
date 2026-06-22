@@ -292,11 +292,30 @@ def select_meter_for_service(
         if matched:
             meters = matched
 
+    def _status_value(row: dict[str, Any]) -> str:
+        return str(row.get("serialStatus") or "").strip().lower()
+
+    def _is_smart_meter(row: dict[str, Any]) -> bool:
+        return str(row.get("meterReadType") or "").strip().lower() == "smart"
+
+    # Portal values vary across accounts/meter migrations. Prefer live meters first.
     active_meters = [
-        m for m in meters
-        if str(m.get("serialStatus") or "").lower() in ("", "active", "current")
+        m
+        for m in meters
+        if _status_value(m) in ("", "active", "current", "energized")
     ]
-    return active_meters[0] if active_meters else meters[0]
+    candidates = active_meters if active_meters else meters
+
+    non_removed = [
+        m
+        for m in candidates
+        if _status_value(m) not in ("removed", "inactive", "retired", "deenergized")
+    ]
+    if non_removed:
+        candidates = non_removed
+
+    smart_candidates = [m for m in candidates if _is_smart_meter(m)]
+    return smart_candidates[0] if smart_candidates else candidates[0]
 
 
 def _build_register_summary(
