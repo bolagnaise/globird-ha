@@ -126,6 +126,16 @@ def _refresh_status_attrs(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _latest_interval_value(intervals: Any) -> float | None:
+    """Return the most recent interval value from an interval list."""
+    if not isinstance(intervals, list) or not intervals:
+        return None
+    last = intervals[-1]
+    if isinstance(last, (int, float)):
+        return float(last)
+    return None
+
+
 @dataclass(frozen=True)
 class GloBirdSensorDescription:
     """Description for a GloBird sensor."""
@@ -217,8 +227,10 @@ async def async_setup_entry(
                 GloBirdLatestDataDateSensor(coordinator, config_entry, service),
                 GloBirdUsageTotalSensor(coordinator, config_entry, service),
                 GloBirdLatestDayUsageSensor(coordinator, config_entry, service),
+                GloBirdLatestIntervalUsageSensor(coordinator, config_entry, service),
                 GloBirdSolarExportTotalSensor(coordinator, config_entry, service),
                 GloBirdLatestDaySolarExportSensor(coordinator, config_entry, service),
+                GloBirdLatestIntervalSolarExportSensor(coordinator, config_entry, service),
                 GloBirdCostTotalSensor(coordinator, config_entry, service),
                 GloBirdLatestDayCostSensor(coordinator, config_entry, service),
                 GloBirdZeroHeroStatusSensor(coordinator, config_entry, service),
@@ -517,6 +529,39 @@ class GloBirdLatestDayUsageSensor(GloBirdServiceBaseSensor):
         return attrs
 
 
+class GloBirdLatestIntervalUsageSensor(GloBirdServiceBaseSensor):
+    """Latest interval import usage sensor."""
+
+    sensor_key = "latest_interval_usage"
+    sensor_name = "Latest Interval Usage"
+    icon = "mdi:chart-timeline-variant"
+    native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+    device_class = SensorDeviceClass.ENERGY
+    state_class = SensorStateClass.MEASUREMENT
+
+    @property
+    def native_value(self) -> Any:
+        """Return the latest import interval usage."""
+        summary = self._service_detail().get("usage_summary") or {}
+        return _latest_interval_value(summary.get("latest_intervals"))
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return interval metadata attributes."""
+        attrs = self._service_attrs()
+        summary = self._service_detail().get("usage_summary") or {}
+        intervals = summary.get("latest_intervals")
+        count = len(intervals) if isinstance(intervals, list) else 0
+        attrs.update(
+            {
+                "latest_day": summary.get("latest_day"),
+                "interval_count": count,
+                "interval_index": (count - 1) if count > 0 else None,
+            }
+        )
+        return attrs
+
+
 class GloBirdSolarExportTotalSensor(GloBirdServiceBaseSensor):
     """Recent solar export total sensor (B1 register)."""
 
@@ -561,7 +606,46 @@ class GloBirdLatestDaySolarExportSensor(GloBirdServiceBaseSensor):
         """Return latest day attributes."""
         attrs = self._service_attrs()
         summary = self._service_detail().get("usage_summary") or {}
-        attrs.update(usage_attributes(summary, direction="export"))
+        attrs.update(
+            usage_attributes(
+                summary,
+                direction="export",
+                include_latest_intervals=True,
+            )
+        )
+        return attrs
+
+
+class GloBirdLatestIntervalSolarExportSensor(GloBirdServiceBaseSensor):
+    """Latest interval solar export sensor."""
+
+    sensor_key = "latest_interval_solar_export"
+    sensor_name = "Latest Interval Solar Export"
+    icon = "mdi:solar-power-variant-outline"
+    native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+    device_class = SensorDeviceClass.ENERGY
+    state_class = SensorStateClass.MEASUREMENT
+
+    @property
+    def native_value(self) -> Any:
+        """Return the latest export interval usage."""
+        summary = self._service_detail().get("usage_summary") or {}
+        return _latest_interval_value(summary.get("latest_export_intervals"))
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return interval metadata attributes."""
+        attrs = self._service_attrs()
+        summary = self._service_detail().get("usage_summary") or {}
+        intervals = summary.get("latest_export_intervals")
+        count = len(intervals) if isinstance(intervals, list) else 0
+        attrs.update(
+            {
+                "latest_day": summary.get("latest_day"),
+                "interval_count": count,
+                "interval_index": (count - 1) if count > 0 else None,
+            }
+        )
         return attrs
 
 

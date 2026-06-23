@@ -171,7 +171,8 @@ def usage_attributes(
         "registers": registers,
     }
     if include_latest_intervals:
-        attrs["latest_intervals"] = summary.get("latest_intervals", [])
+        interval_key = "latest_export_intervals" if direction == "export" else "latest_intervals"
+        attrs["latest_intervals"] = summary.get(interval_key, [])
     return attrs
 
 
@@ -534,6 +535,7 @@ def build_usage_summary(
             "total_export": None,
             "latest_day_export": None,
             "export_daily": [],
+            "latest_export_intervals": [],
             "registers": [],
         }
 
@@ -553,6 +555,7 @@ def build_usage_summary(
         "total_export": export_summary["total"],
         "latest_day_export": export_summary["latest_day_usage"],
         "export_daily": export_summary["daily"],
+        "latest_export_intervals": export_summary["latest_intervals"],
         "registers": _build_usage_register_summaries(rows),
     }
 

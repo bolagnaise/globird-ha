@@ -206,6 +206,7 @@ def test_extract_accounts_services_and_summaries() -> None:
     assert usage["total_usage"] == 3.5
     assert usage["latest_day"] == "2026-04-02"
     assert usage["latest_intervals"] == [0.4, 0.5, 0.6]
+    assert usage["latest_export_intervals"] == []
     # Fixture: 2 days × (SOLAR + USAGE + SUPPLY). Net = (1.48) + (-0.43) = 1.05
     assert cost["total_amount"] == 1.05
     assert cost["total_quantity"] == 21.5
@@ -324,6 +325,7 @@ def test_usage_summary_tracks_all_registers_and_b_exports() -> None:
     assert usage["latest_day_usage"] == 4.0
     assert usage["total_export"] == 2.5
     assert usage["latest_day_export"] == 2.5
+    assert usage["latest_export_intervals"] == [1.5, 1.0]
     assert [register["key"] for register in usage["registers"]] == [
         "B2-Super Export",
         "E1-Peak",
@@ -629,6 +631,31 @@ def test_sensor_attributes_are_recorder_safe_summaries() -> None:
     assert len(json.dumps(cost)) < 16_384
 
 
+def test_usage_attributes_export_interval_source() -> None:
+    """Export usage attributes should surface export interval arrays when requested."""
+    summary = {
+        "export_daily": [{"readDate": "2026-04-24", "usage": 2.5}],
+        "registers": [
+            {
+                "key": "B2-Super Export",
+                "direction": "export",
+                "suffix": "B2",
+                "chargeType": "Super Export",
+                "chargeCategoryCode": "SOLAR",
+                "days": 1,
+                "total": 2.5,
+                "latest_day": "2026-04-24",
+                "latest_day_usage": 2.5,
+            }
+        ],
+        "latest_export_intervals": [1.5, 1.0],
+    }
+
+    attrs = usage_attributes(summary, direction="export", include_latest_intervals=True)
+
+    assert attrs["latest_intervals"] == [1.5, 1.0]
+
+
 def test_redact_sensitive_diagnostics() -> None:
     """Diagnostics redaction removes credentials and account identifiers."""
     payload = {
@@ -673,6 +700,7 @@ def load_tests(
         test_cost_summary_exposes_new_category_totals,
         test_cost_summary_projects_current_month_cost,
         test_sensor_attributes_are_recorder_safe_summaries,
+        test_usage_attributes_export_interval_source,
         test_redact_sensitive_diagnostics,
     ):
         suite.addTest(unittest.FunctionTestCase(test_func))
