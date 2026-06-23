@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
+from zoneinfo import ZoneInfo
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -13,6 +15,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .api import (
     GloBirdClient,
     build_cost_summary,
+    build_usage_interval_daily_series,
     build_usage_summary,
     build_weather_summary,
     extract_accounts_and_services,
@@ -58,6 +61,7 @@ class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             hass, STORAGE_VERSION, f"{DOMAIN}.cookies.{entry.entry_id}"
         )
         self._cache: dict[str, Any] | None = None
+        self._interval_backfill_cursor: dict[str, str] = {}
         self._initialized = False
 
     async def async_shutdown(self) -> None:
@@ -71,6 +75,9 @@ class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         loaded_cache = await self._cache_store.async_load()
         self._cache = loaded_cache if isinstance(loaded_cache, dict) else None
+        cursor = self._cache.get("interval_backfill_cursor") if isinstance(self._cache, dict) else None
+        self._interval_backfill_cursor = cursor if isinstance(cursor, dict) else {}
+
         cookie_state = await self._cookie_store.async_load()
         cookies = cookie_state.get("cookies", []) if isinstance(cookie_state, dict) else []
         if isinstance(cookies, list) and cookies:
@@ -188,9 +195,11 @@ class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     data.get("read_meters"),
                     data.get("service_status"),
                     cached_detail if isinstance(cached_detail, dict) else {},
+                    self._interval_backfill_cursor,
                 )
 
             data["service_data"] = service_data
+            data["interval_backfill_cursor"] = self._interval_backfill_cursor
 
             self._cache = data
             await self._cache_store.async_save(data)
@@ -207,12 +216,146 @@ class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 return stale
             raise UpdateFailed(f"Unable to fetch GloBird data: {err}") from err
 
+    @staticmethod
+    def _parse_portal_date(value: Any) -> datetime | None:
+        """Return midnight datetime for supported portal date formats."""
+        if not value:
+            return None
+        raw = str(value).split("T")[0]
+        for fmt in ("%Y-%m-%d", "%Y/%m/%d"):
+            try:
+                return datetime.strptime(raw, fmt)
+            except ValueError:
+                continue
+        return None
+
+    def _build_interval_statistics_points(
+        self,
+        series: list[dict[str, Any]],
+        *,
+        since_utc: datetime | None,
+    ) -> tuple[list[dict[str, Any]], datetime | None]:
+        """Build external-statistics points from daily interval arrays."""
+        tz_name = self.hass.config.time_zone or "UTC"
+        try:
+            local_tz = ZoneInfo(tz_name)
+        except Exception:  # noqa: BLE001 - fallback to UTC when timezone is invalid.
+            local_tz = timezone.utc
+
+        points: list[dict[str, Any]] = []
+        newest_point: datetime | None = None
+
+        for day_row in series:
+            day = self._parse_portal_date(day_row.get("readDate"))
+            intervals = day_row.get("intervals")
+            if day is None or not isinstance(intervals, list) or not intervals:
+                continue
+
+            interval_step = timedelta(seconds=(24 * 60 * 60) / len(intervals))
+            day_start = datetime.combine(day.date(), datetime.min.time(), tzinfo=local_tz)
+            for idx, interval_value in enumerate(intervals):
+                if not isinstance(interval_value, (int, float)):
+                    continue
+                start_utc = (day_start + interval_step * idx).astimezone(timezone.utc)
+                if since_utc is not None and start_utc <= since_utc:
+                    continue
+
+                value = float(interval_value)
+                points.append(
+                    {
+                        "start": start_utc,
+                        "mean": value,
+                        "min": value,
+                        "max": value,
+                    }
+                )
+                if newest_point is None or start_utc > newest_point:
+                    newest_point = start_utc
+
+        return points, newest_point
+
+    @staticmethod
+    def _parse_cursor_timestamp(value: str | None) -> datetime | None:
+        """Parse a persisted UTC timestamp cursor."""
+        if not value:
+            return None
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError:
+            return None
+        return parsed.astimezone(timezone.utc) if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+    async def _publish_usage_interval_backfill(
+        self,
+        service: dict[str, Any],
+        usage_payload: dict[str, Any] | None,
+        interval_backfill_cursor: dict[str, str],
+    ) -> dict[str, Any]:
+        """Publish historical interval usage into Home Assistant external statistics."""
+        if not isinstance(usage_payload, dict):
+            return {
+                "import_points": 0,
+                "export_points": 0,
+                "updated": False,
+            }
+
+        try:
+            from homeassistant.components.recorder.statistics import (  # pylint: disable=import-outside-toplevel
+                async_add_external_statistics,
+            )
+        except Exception:  # noqa: BLE001 - recorder/statistics may be unavailable.
+            return {
+                "import_points": 0,
+                "export_points": 0,
+                "updated": False,
+                "reason": "recorder_unavailable",
+            }
+
+        sid = service_id(service)
+        totals = {
+            "import_points": 0,
+            "export_points": 0,
+            "updated": False,
+        }
+
+        for direction in ("import", "export"):
+            cursor_key = f"{sid}:{direction}"
+            since_utc = self._parse_cursor_timestamp(interval_backfill_cursor.get(cursor_key))
+            series = build_usage_interval_daily_series(usage_payload, direction=direction)
+            points, newest = self._build_interval_statistics_points(series, since_utc=since_utc)
+            if not points:
+                continue
+
+            statistic_id = f"{DOMAIN}:{sid}:{direction}_interval_kwh"
+            metadata = {
+                "has_mean": True,
+                "has_sum": False,
+                "name": f"GloBird {sid} {direction.title()} Interval Usage",
+                "source": DOMAIN,
+                "statistic_id": statistic_id,
+                "unit_of_measurement": "kWh",
+            }
+
+            try:
+                await async_add_external_statistics(self.hass, metadata, points)
+            except Exception as err:  # noqa: BLE001 - statistics import should not fail refresh.
+                _LOGGER.debug("Unable to publish interval backfill for %s: %s", statistic_id, err)
+                continue
+
+            totals[f"{direction}_points"] = len(points)
+            totals["updated"] = True
+            if newest is not None:
+                interval_backfill_cursor[cursor_key] = newest.isoformat()
+
+        return totals
+
     async def _fetch_service_detail(
         self,
         service: dict[str, Any],
         meters_payload: dict[str, Any] | None,
         status_payload: dict[str, Any] | None,
         cache: dict[str, Any],
+        interval_backfill_cursor: dict[str, str],
     ) -> dict[str, Any]:
         """Fetch heavier per-service detail."""
         sid = service_id(service)
@@ -290,6 +433,12 @@ class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     ):
                         break
 
+        usage_backfill = await self._publish_usage_interval_backfill(
+            service,
+            usage,
+            interval_backfill_cursor,
+        )
+
         cost = None
         if identifier and account_service_id:
             cost = await self._fetch_optional(
@@ -322,6 +471,7 @@ class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "meter": meter,
             "usage_meter_serials": usage_meter_serials,
             "usage_fallback_applied": len(usage_meter_serials) > 1,
+            "usage_backfill": usage_backfill,
             "usage": usage,
             "usage_summary": build_usage_summary(usage),
             "cost": cost,

@@ -560,6 +560,55 @@ def build_usage_summary(
     }
 
 
+def build_usage_interval_daily_series(
+    usage_payload: dict[str, Any] | None,
+    *,
+    direction: str,
+) -> list[dict[str, Any]]:
+    """Return per-day interval arrays for import or export usage.
+
+    Rows are grouped by readDate and interval arrays are summed element-wise
+    across all matching rows for that day.
+    """
+    rows = _payload_data(usage_payload)
+    if not isinstance(rows, list):
+        return []
+
+    if direction == "export":
+        selected_rows = [row for row in rows if _is_export_register(row)]
+    else:
+        selected_rows = [row for row in rows if not _is_export_register(row)]
+
+    by_date: dict[str, list[float]] = {}
+    for row in selected_rows:
+        read_date = str(row.get("readDate") or "")
+        interval_values = row.get("usageArray")
+        if not read_date or not isinstance(interval_values, list) or not interval_values:
+            continue
+
+        normalized = [(_as_float(value) or 0.0) for value in interval_values]
+        existing = by_date.get(read_date)
+        if existing is None:
+            by_date[read_date] = normalized
+            continue
+
+        if len(existing) < len(normalized):
+            existing.extend([0.0] * (len(normalized) - len(existing)))
+        for idx, value in enumerate(normalized):
+            existing[idx] += value
+
+    series: list[dict[str, Any]] = []
+    for read_date in sorted(by_date):
+        series.append(
+            {
+                "readDate": read_date,
+                "intervals": [_round(value, 5) for value in by_date[read_date]],
+            }
+        )
+
+    return series
+
+
 def build_cost_summary(cost_payload: dict[str, Any] | None) -> dict[str, Any]:
     """Build recorder-safe cost summary."""
     rows = _payload_data(cost_payload)

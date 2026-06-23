@@ -29,6 +29,7 @@ GloBirdCaptchaRequired = api.GloBirdCaptchaRequired
 GloBirdAuthError = api.GloBirdAuthError
 GloBirdClient = api.GloBirdClient
 build_cost_summary = api.build_cost_summary
+build_usage_interval_daily_series = api.build_usage_interval_daily_series
 build_usage_summary = api.build_usage_summary
 build_weather_summary = api.build_weather_summary
 cost_attributes = api.cost_attributes
@@ -333,6 +334,36 @@ def test_usage_summary_tracks_all_registers_and_b_exports() -> None:
     ]
     assert usage["registers"][0]["direction"] == "export"
     assert usage["registers"][2]["chargeCategoryCode"] == "CONTROL"
+
+
+def test_build_usage_interval_daily_series_sums_by_day_and_direction() -> None:
+    """Interval series should aggregate rows per day and split import/export."""
+    payload = {
+        "data": [
+            {
+                "readDate": "2026/06/24",
+                "suffix": "E1",
+                "usageArray": [0.1, 0.2, 0.3],
+            },
+            {
+                "readDate": "2026/06/24",
+                "suffix": "E2",
+                "usageArray": [0.4, 0.5, 0.6],
+            },
+            {
+                "readDate": "2026/06/24",
+                "suffix": "B1",
+                "usageArray": [0.7, 0.8, 0.9],
+            },
+        ],
+        "success": True,
+    }
+
+    import_series = build_usage_interval_daily_series(payload, direction="import")
+    export_series = build_usage_interval_daily_series(payload, direction="export")
+
+    assert import_series == [{"readDate": "2026/06/24", "intervals": [0.5, 0.7, 0.9]}]
+    assert export_series == [{"readDate": "2026/06/24", "intervals": [0.7, 0.8, 0.9]}]
 
 
 def test_select_meter_prefers_energized_smart_over_removed_basic() -> None:
@@ -691,6 +722,7 @@ def load_tests(
         test_cost_summary_net_daily_is_sum_not_last_row,
         test_cost_summary_ignores_supply_only_partial_latest_day,
         test_usage_summary_tracks_all_registers_and_b_exports,
+        test_build_usage_interval_daily_series_sums_by_day_and_direction,
         test_select_meter_prefers_energized_smart_over_removed_basic,
         test_select_meter_prefers_smart_when_status_unknown,
         test_usage_requires_history_fallback_when_earliest_date_too_recent,

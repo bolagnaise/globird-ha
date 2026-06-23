@@ -56,8 +56,10 @@ Service-level sensors include:
 - Latest data date
 - Recent usage total
 - Latest day usage
+- Latest interval usage
 - Recent solar export total
 - Latest day solar export
+- Latest interval solar export
 - Recent cost total
 - Latest daily cost
 - ZeroHero status
@@ -66,11 +68,17 @@ Service-level sensors include:
 - Billing period cost
 - Weather summary
 
-Recorder-safe daily summaries, the latest interval array, compact usage register totals, cost category totals, and incomplete cost days are exposed as sensor attributes. Daily usage and cost attributes keep the most recent rows and include count/truncation flags; full cached snapshots are available through Home Assistant diagnostics with sensitive fields redacted.
+Recorder-safe daily summaries, the latest interval arrays, compact usage register totals, cost category totals, and incomplete cost days are exposed as sensor attributes. Daily usage and cost attributes keep the most recent rows and include count/truncation flags; full cached snapshots are available through Home Assistant diagnostics with sensitive fields redacted.
+
+For smart-meter services, the integration also exposes first-class interval sensors for the latest import and solar-export interval values so Home Assistant can graph them like normal entity history.
 
 ## Updates and data freshness
 
 Home Assistant polls the GloBird portal every 30 minutes. You can also force a check with Home Assistant's standard **Update entity** action on any GloBird entity.
+
+Usage fetches currently request a 31-day window. When a meter has been replaced during that window, the integration prefers the live meter and can fall back to removed meters to recover older usage rows that still belong to the previous meter.
+
+For smart-meter usage, interval arrays from the fetched usage rows are also published into Home Assistant Recorder as external statistics. That allows historical interval points already available from the portal to be backfilled into HA instead of only starting from the moment the integration is installed.
 
 GloBird usage and cost data normally trails by at least one day, and the portal can publish a fixed supply-charge row before the rest of that day's usage/export rows are ready. To avoid showing that early partial value as the latest daily cost, the integration only advances Latest Daily Cost to the newest cost date that has more than the fixed `SUPPLY` row. If a newer incomplete date is visible from the portal, it is exposed in attributes on Latest Data Date and cost sensors as `latest_available_day`, `latest_available_day_complete`, and `incomplete_days`.
 
