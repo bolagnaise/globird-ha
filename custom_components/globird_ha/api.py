@@ -601,6 +601,32 @@ def build_latest_data_status(
     }
 
 
+def all_services_ready_for_day(
+    service_data: dict[str, Any] | None,
+    target_day: date,
+) -> bool:
+    """Return whether every discovered service is ready for target_day or newer."""
+    if not isinstance(service_data, dict) or not service_data:
+        return False
+
+    for detail in service_data.values():
+        if not isinstance(detail, dict):
+            return False
+
+        latest_status = detail.get("latest_data_status")
+        if not isinstance(latest_status, dict):
+            return False
+
+        if latest_status.get("status") != "ready":
+            return False
+
+        ready_day = _parse_date(latest_status.get("latest_ready_day"))
+        if ready_day is None or ready_day < target_day:
+            return False
+
+    return True
+
+
 def _build_projected_month_summary(
     daily: list[dict[str, Any]],
     today: date | None = None,

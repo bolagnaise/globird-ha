@@ -32,6 +32,7 @@ build_cost_summary = api.build_cost_summary
 build_latest_data_status = api.build_latest_data_status
 build_usage_summary = api.build_usage_summary
 build_weather_summary = api.build_weather_summary
+all_services_ready_for_day = api.all_services_ready_for_day
 cost_attributes = api.cost_attributes
 extract_accounts_and_services = api.extract_accounts_and_services
 redact_sensitive = api.redact_sensitive
@@ -317,6 +318,47 @@ def test_latest_data_status_ready_when_usage_and_cost_align() -> None:
 
     assert status["status"] == "ready"
     assert status["latest_ready_day"] == "2026/06/01"
+
+
+def test_all_services_ready_for_day_requires_every_service_ready() -> None:
+    """Polling can slow only once every discovered service is ready."""
+    service_data = {
+        "svc-1": {
+            "latest_data_status": {
+                "status": "ready",
+                "latest_ready_day": "2026/06/01",
+            },
+        },
+        "svc-2": {
+            "latest_data_status": {
+                "status": "waiting_for_cost",
+                "latest_ready_day": "2026/05/31",
+            },
+        },
+    }
+
+    assert all_services_ready_for_day(service_data, date(2026, 6, 1)) is False
+
+    service_data["svc-2"]["latest_data_status"] = {
+        "status": "ready",
+        "latest_ready_day": "2026-06-01",
+    }
+
+    assert all_services_ready_for_day(service_data, date(2026, 6, 1)) is True
+
+
+def test_all_services_ready_for_day_rejects_stale_ready_data() -> None:
+    """Aligned old data should not pause polling for the current daily target."""
+    service_data = {
+        "svc-1": {
+            "latest_data_status": {
+                "status": "ready",
+                "latest_ready_day": "2026/05/31",
+            },
+        },
+    }
+
+    assert all_services_ready_for_day(service_data, date(2026, 6, 1)) is False
 
 
 def test_usage_summary_tracks_all_registers_and_b_exports() -> None:

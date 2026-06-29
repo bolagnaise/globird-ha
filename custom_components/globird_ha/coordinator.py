@@ -3,15 +3,18 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import datetime, time as dt_time, timedelta
 from typing import Any, Awaitable, Callable
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util import dt as dt_util
 
 from .api import (
     GloBirdClient,
+    all_services_ready_for_day,
     build_cost_summary,
     build_latest_data_status,
     build_usage_summary,
@@ -21,6 +24,7 @@ from .api import (
     service_id,
 )
 from .const import (
+    ACCOUNT_READY_UPDATE_OFFSET,
     ACCOUNT_UPDATE_INTERVAL,
     CONF_EMAIL,
     CONF_PASSWORD,
@@ -30,6 +34,16 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _next_ready_poll_interval(now: datetime) -> timedelta:
+    """Return the interval until the first readiness check for the next day."""
+    next_day = now.date() + timedelta(days=1)
+    next_poll = (
+        datetime.combine(next_day, dt_time.min, tzinfo=now.tzinfo)
+        + ACCOUNT_READY_UPDATE_OFFSET
+    )
+    return next_poll - now
 
 
 class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
@@ -57,6 +71,28 @@ class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         self._cache: dict[str, Any] | None = None
         self._initialized = False
+
+    def _set_update_interval_for_data(self, data: dict[str, Any]) -> None:
+        """Slow polling after all services have the latest daily data."""
+        now = dt_util.now()
+        target_day = now.date() - timedelta(days=1)
+        ready_for_today = all_services_ready_for_day(
+            data.get("service_data"),
+            target_day,
+        )
+        next_interval = (
+            _next_ready_poll_interval(now)
+            if ready_for_today
+            else ACCOUNT_UPDATE_INTERVAL
+        )
+
+        if self.update_interval != next_interval:
+            _LOGGER.debug(
+                "GloBird update interval changed to %s; latest daily data ready=%s",
+                next_interval,
+                ready_for_today,
+            )
+        self.update_interval = next_interval
 
     async def async_shutdown(self) -> None:
         """Close resources."""
@@ -189,6 +225,7 @@ class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 )
 
             data["service_data"] = service_data
+            self._set_update_interval_for_data(data)
 
             self._cache = data
             await self._cache_store.async_save(data)
@@ -198,6 +235,7 @@ class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return data
 
         except Exception as err:  # noqa: BLE001 - coordinator should preserve cache.
+            self.update_interval = ACCOUNT_UPDATE_INTERVAL
             if cache:
                 stale = dict(cache)
                 stale["refresh_error"] = str(err)
