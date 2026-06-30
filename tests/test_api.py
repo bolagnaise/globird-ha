@@ -29,6 +29,7 @@ GloBirdCaptchaRequired = api.GloBirdCaptchaRequired
 GloBirdAuthError = api.GloBirdAuthError
 GloBirdClient = api.GloBirdClient
 build_cost_summary = api.build_cost_summary
+build_billing_period_projection = api.build_billing_period_projection
 build_latest_data_status = api.build_latest_data_status
 build_usage_summary = api.build_usage_summary
 build_weather_summary = api.build_weather_summary
@@ -441,6 +442,14 @@ def test_usage_summary_tracks_all_registers_and_b_exports() -> None:
                 "chargeCategoryCode": "SOLAR",
                 "usageArray": [1.5, 1.0],
             },
+            {
+                "readDate": "2026-04-24",
+                "usage": 0.9,
+                "suffix": "E3",
+                "chargeType": "Solar Export",
+                "chargeCategoryCode": "SOLAR",
+                "usageArray": [0.4, 0.5],
+            },
         ],
         "message": None,
         "success": True,
@@ -450,15 +459,17 @@ def test_usage_summary_tracks_all_registers_and_b_exports() -> None:
 
     assert usage["total_usage"] == 4.0
     assert usage["latest_day_usage"] == 4.0
-    assert usage["total_export"] == 2.5
-    assert usage["latest_day_export"] == 2.5
+    assert usage["total_export"] == 3.4
+    assert usage["latest_day_export"] == 3.4
     assert [register["key"] for register in usage["registers"]] == [
         "B2-Super Export",
         "E1-Peak",
         "E2-Controlled Load",
+        "E3-Solar Export",
     ]
     assert usage["registers"][0]["direction"] == "export"
     assert usage["registers"][2]["chargeCategoryCode"] == "CONTROL"
+    assert usage["registers"][3]["direction"] == "export"
 
 
 def test_cost_summary_exposes_new_category_totals() -> None:
@@ -506,6 +517,69 @@ def test_cost_summary_exposes_new_category_totals() -> None:
         {"chargeCategory": "USAGE", "amount": 1.2, "quantity": 3.0},
         {"chargeCategory": "ZEROHERO Credit", "amount": -0.3, "quantity": 0.0},
     ]
+
+
+def test_cost_summary_exposes_daily_net_totals() -> None:
+    """Billing calculations use daily net totals instead of rounded category rows."""
+    payload = {
+        "data": [
+            {
+                "chargeCategory": "USAGE",
+                "date": "2026/06/01",
+                "amount": 1.114,
+                "quantity": 3.0,
+            },
+            {
+                "chargeCategory": "SUPPLY",
+                "date": "2026/06/01",
+                "amount": 1.116,
+                "quantity": 0.0,
+            },
+            {
+                "chargeCategory": "SOLAR",
+                "date": "2026/06/02",
+                "amount": -0.224,
+                "quantity": 1.5,
+            },
+            {
+                "chargeCategory": "SUPPLY",
+                "date": "2026/06/02",
+                "amount": 1.116,
+                "quantity": 0.0,
+            },
+        ],
+        "message": None,
+        "success": True,
+    }
+
+    cost = build_cost_summary(payload)
+
+    assert cost["daily_totals"] == [
+        {"date": "2026/06/01", "amount": 2.23},
+        {"date": "2026/06/02", "amount": 0.89},
+    ]
+
+
+def test_billing_period_projection_uses_billing_days_not_calendar_month() -> None:
+    """Expected monthly cost should align with the current billing cycle."""
+    projection = build_billing_period_projection(
+        [
+            {"date": "2026/06/03", "amount": 10.0},
+            {"date": "2026/06/04", "amount": 14.0},
+            {"date": "2026/06/05", "amount": 6.0},
+        ],
+        date(2026, 6, 3),
+        period_days=30,
+    )
+
+    assert projection == {
+        "billing_period_start": "2026-06-03",
+        "cost_to_date": 30.0,
+        "projected_cost": 300.0,
+        "completed_days": 3,
+        "period_days": 30,
+        "latest_day": "2026-06-05",
+    }
 
 
 def test_cost_summary_projects_current_month_cost() -> None:

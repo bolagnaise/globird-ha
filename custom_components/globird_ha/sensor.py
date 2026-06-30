@@ -17,6 +17,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .api import (
+    build_billing_period_projection,
     build_latest_data_status,
     cost_attributes,
     service_id,
@@ -711,7 +712,7 @@ class GloBirdZeroHeroStatusSensor(GloBirdServiceBaseSensor):
 
 
 class GloBirdExpectedMonthlyCostSensor(GloBirdServiceBaseSensor):
-    """Projected cost for the current calendar month."""
+    """Projected cost for the current billing period."""
 
     sensor_key = "expected_month_cost"
     sensor_name = "Expected Monthly Cost"
@@ -722,22 +723,26 @@ class GloBirdExpectedMonthlyCostSensor(GloBirdServiceBaseSensor):
 
     @property
     def native_value(self) -> Any:
-        """Return projected current-month cost."""
-        projected = (self._service_detail().get("cost_summary") or {}).get(
-            "projected_month"
-        ) or {}
+        """Return projected billing-period cost."""
+        cost_summary = self._service_detail().get("cost_summary") or {}
+        projected = build_billing_period_projection(
+            cost_summary.get("daily_totals"),
+            _billing_period_start(self.coordinator.data or {}),
+        )
         return projected.get("projected_cost")
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        """Return projected monthly cost calculation inputs."""
+        """Return projected billing-period cost calculation inputs."""
         attrs = self._service_attrs()
-        projected = (self._service_detail().get("cost_summary") or {}).get(
-            "projected_month"
-        ) or {}
+        cost_summary = self._service_detail().get("cost_summary") or {}
+        projected = build_billing_period_projection(
+            cost_summary.get("daily_totals"),
+            _billing_period_start(self.coordinator.data or {}),
+        )
         attrs.update(projected)
         attrs["calculation"] = (
-            "current_month_cost_to_date / completed_days * days_in_month"
+            "billing_period_cost_to_date / completed_days * period_days"
         )
         return attrs
 
@@ -797,15 +802,16 @@ class GloBirdBillingPeriodCostSensor(GloBirdServiceBaseSensor):
     def native_value(self) -> Any:
         """Return net cost since billing period start."""
         start = _billing_period_start(self.coordinator.data or {})
-        daily = (self._service_detail().get("cost_summary") or {}).get("daily", [])
-        if not daily:
+        cost_summary = self._service_detail().get("cost_summary") or {}
+        daily_totals = cost_summary.get("daily_totals", [])
+        if not daily_totals:
             return None
         if start is None:
-            return (self._service_detail().get("cost_summary") or {}).get("total_amount")
+            return cost_summary.get("total_amount")
         start_slash = start.strftime("%Y/%m/%d")
         total = sum(
             (row.get("amount") or 0.0)
-            for row in daily
+            for row in daily_totals
             if str(row.get("date") or "") >= start_slash
         )
         return round(total, 2)

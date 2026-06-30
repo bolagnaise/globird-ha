@@ -193,6 +193,7 @@ def cost_attributes(summary: dict[str, Any]) -> dict[str, Any]:
         "daily": _recent_rows(daily_rows),
         "daily_count": len(daily_rows),
         "daily_truncated": len(daily_rows) > ATTR_RECENT_ROW_LIMIT,
+        "daily_totals": _recent_rows(summary.get("daily_totals", [])),
         "available_daily": _recent_rows(available_rows),
         "available_daily_count": len(available_rows),
         "available_daily_truncated": len(available_rows) > ATTR_RECENT_ROW_LIMIT,
@@ -427,7 +428,20 @@ def _usage_register_key(row: dict[str, Any]) -> str:
 
 def _is_export_register(row: dict[str, Any]) -> bool:
     """Return whether a usage row represents export/feed-in energy."""
-    return str(row.get("suffix") or "").upper().startswith("B")
+    suffix = str(row.get("suffix") or "").strip().upper()
+    if suffix.startswith("B"):
+        return True
+
+    direction = str(row.get("direction") or "").strip().lower()
+    if direction in {"export", "feed-in", "feed in", "solar"}:
+        return True
+
+    category = str(row.get("chargeCategoryCode") or "").strip().lower()
+    charge_type = str(row.get("chargeType") or "").strip().lower()
+    export_markers = ("solar", "export", "feed")
+    return any(marker in category for marker in export_markers) or any(
+        marker in charge_type for marker in export_markers
+    )
 
 
 def _build_usage_register_summaries(
@@ -505,6 +519,7 @@ def build_cost_summary(cost_payload: dict[str, Any] | None) -> dict[str, Any]:
         rows = []
 
     daily: list[dict[str, Any]] = []
+    daily_totals: dict[str, float] = {}
     available_daily: list[dict[str, Any]] = []
     categories: dict[str, dict[str, Any]] = {}
     total_amount = 0.0
@@ -542,6 +557,7 @@ def build_cost_summary(cost_payload: dict[str, Any] | None) -> dict[str, Any]:
 
         total_amount += amount
         total_quantity += quantity
+        daily_totals[dk] = daily_totals.get(dk, 0.0) + amount
         category = _cost_category(row)
         if category not in categories:
             categories[category] = {
@@ -585,6 +601,10 @@ def build_cost_summary(cost_payload: dict[str, Any] | None) -> dict[str, Any]:
             latest_day_zerohero_credit is not None and latest_day_zerohero_credit != 0
         ),
         "daily": daily,
+        "daily_totals": [
+            {"date": day, "amount": _round(amount, 2)}
+            for day, amount in sorted(daily_totals.items())
+        ],
         "available_daily": available_daily,
         "incomplete_days": sorted(set(grouped_rows) - complete_days),
         "projected_month": _build_projected_month_summary(daily),
@@ -716,6 +736,61 @@ def _build_projected_month_summary(
         "projected_cost": _round(projected_cost, 2),
         "completed_days": completed_days,
         "days_in_month": days_in_month,
+        "latest_day": latest_day.isoformat(),
+    }
+
+
+def build_billing_period_projection(
+    daily_totals: list[dict[str, Any]] | None,
+    billing_period_start: date | None,
+    *,
+    period_days: int = 30,
+) -> dict[str, Any]:
+    """Project billing-period cost from completed daily net totals."""
+    if billing_period_start is None or not isinstance(daily_totals, list):
+        return {
+            "billing_period_start": (
+                billing_period_start.isoformat() if billing_period_start else None
+            ),
+            "cost_to_date": None,
+            "projected_cost": None,
+            "completed_days": 0,
+            "period_days": period_days,
+            "latest_day": None,
+        }
+
+    totals: dict[date, float] = {}
+    for row in daily_totals:
+        if not isinstance(row, dict):
+            continue
+        row_date = _parse_date(row.get("date"))
+        if row_date is None or row_date < billing_period_start:
+            continue
+        totals[row_date] = totals.get(row_date, 0.0) + (
+            _as_float(row.get("amount")) or 0.0
+        )
+
+    if not totals:
+        return {
+            "billing_period_start": billing_period_start.isoformat(),
+            "cost_to_date": None,
+            "projected_cost": None,
+            "completed_days": 0,
+            "period_days": period_days,
+            "latest_day": None,
+        }
+
+    latest_day = max(totals)
+    completed_days = max(1, (latest_day - billing_period_start).days + 1)
+    cost_to_date = sum(totals.values())
+    projected_cost = cost_to_date / completed_days * period_days
+
+    return {
+        "billing_period_start": billing_period_start.isoformat(),
+        "cost_to_date": _round(cost_to_date, 2),
+        "projected_cost": _round(projected_cost, 2),
+        "completed_days": completed_days,
+        "period_days": period_days,
         "latest_day": latest_day.isoformat(),
     }
 

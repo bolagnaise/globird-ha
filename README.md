@@ -67,7 +67,7 @@ Service-level sensors include:
 - Billing period cost
 - Weather summary
 
-Recorder-safe daily summaries, the latest interval array, compact usage register totals, cost category totals, and incomplete cost days are exposed as sensor attributes. Daily usage and cost attributes keep the most recent rows and include count/truncation flags; full cached snapshots are available through Home Assistant diagnostics with sensitive fields redacted.
+Recorder-safe daily summaries, the latest interval array, compact usage register totals, cost category totals, daily net cost totals, and incomplete cost days are exposed as sensor attributes. Daily usage and cost attributes keep the most recent rows and include count/truncation flags; full cached snapshots are available through Home Assistant diagnostics with sensitive fields redacted.
 
 ## Updates and data freshness
 
@@ -76,6 +76,8 @@ Home Assistant polls the GloBird portal every 30 minutes until all discovered se
 GloBird usage and cost data normally trails by at least one day, and the portal can publish a fixed supply-charge row before the rest of that day's usage/export rows are ready. To avoid showing that early partial value as the latest daily cost, the integration only advances Latest Daily Cost to the newest cost date that has more than the fixed `SUPPLY` row. Latest Data Date only advances when usage and complete cost data are aligned for the same day. Latest Data Status reports `ready`, `waiting_for_cost`, `waiting_for_usage`, or `no_data` for automations that need to wait until a daily notification can safely use the latest date, cost, and ZeroHero sensors. If a newer incomplete date is visible from the portal, it is exposed in attributes on Latest Data Date, Latest Data Status, and cost sensors as `latest_available_day`, `latest_available_day_complete`, and `incomplete_days`.
 
 ZeroHero status is derived from the latest complete cost day. It reports `achieved` when the cost detail for that day contains a non-zero `ZEROHERO Credit` row, `missed` when the day is complete but no credit was present, and `unknown` before a complete cost day is available.
+
+Expected Monthly Cost projects the current billing period from completed daily net cost totals, using the latest invoice issue date as the billing-period start and a 30-day period. Billing Period Cost uses the same daily net totals so it matches the projection inputs.
 
 Pricing/rate-plan sensors are not currently exposed. The portal exposes product metadata, but not enough rate detail has been validated to provide EMHASS-ready import/export price sensors safely.
 
