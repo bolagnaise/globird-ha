@@ -260,6 +260,51 @@ def service_id(service: dict[str, Any]) -> str:
     return str(value or "unknown")
 
 
+_ACTIVE_METER_STATUSES = {"active", "current", "energized", "energised"}
+_INACTIVE_METER_STATUSES = {
+    "closed",
+    "de-energised",
+    "de-energized",
+    "disconnected",
+    "inactive",
+    "removed",
+}
+
+
+def _normalised_meter_statuses(meter: dict[str, Any]) -> set[str]:
+    """Return normalized meter status fields."""
+    return {
+        str(value).strip().lower()
+        for value in (
+            meter.get("serialStatus"),
+            meter.get("suffixStatus"),
+        )
+        if value
+    }
+
+
+def _meter_status_rank(meter: dict[str, Any]) -> int:
+    """Rank meters by whether the portal says they are usable."""
+    statuses = _normalised_meter_statuses(meter)
+    if statuses & _INACTIVE_METER_STATUSES:
+        return 0
+    if statuses & _ACTIVE_METER_STATUSES:
+        return 3
+    if not statuses:
+        return 2
+    return 1
+
+
+def _meter_type_rank(meter: dict[str, Any]) -> int:
+    """Prefer interval/smart meters over basic meters when both are usable."""
+    meter_type = str(meter.get("meterReadType") or "").strip().lower()
+    if meter_type == "basic":
+        return 0
+    if meter_type:
+        return 1
+    return 0
+
+
 def select_meter_for_service(
     service: dict[str, Any],
     meters_payload: dict[str, Any] | None,
@@ -292,11 +337,14 @@ def select_meter_for_service(
         if matched:
             meters = matched
 
-    active_meters = [
-        m for m in meters
-        if str(m.get("serialStatus") or "").lower() in ("", "active", "current")
-    ]
-    return active_meters[0] if active_meters else meters[0]
+    return max(
+        enumerate(meters),
+        key=lambda item: (
+            _meter_status_rank(item[1]),
+            _meter_type_rank(item[1]),
+            -item[0],
+        ),
+    )[1]
 
 
 def _build_register_summary(

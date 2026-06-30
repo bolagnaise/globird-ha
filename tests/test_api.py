@@ -36,6 +36,7 @@ all_services_ready_for_day = api.all_services_ready_for_day
 cost_attributes = api.cost_attributes
 extract_accounts_and_services = api.extract_accounts_and_services
 redact_sensitive = api.redact_sensitive
+select_meter_for_service = api.select_meter_for_service
 usage_attributes = api.usage_attributes
 
 
@@ -213,6 +214,57 @@ def test_extract_accounts_services_and_summaries() -> None:
     assert cost["latest_available_day"] == "2026/04/02"
     assert cost["latest_available_day_complete"] is True
     assert weather["latest_max_temp"] == 29
+
+
+def test_select_meter_prefers_energized_smart_over_removed_basic() -> None:
+    """Meter upgrades should use the current smart meter, not the removed basic meter."""
+    selected = select_meter_for_service(
+        {"siteIdentifier": "NMI123"},
+        {
+            "data": [
+                {
+                    "siteIdentifier": "NMI123",
+                    "meterReadType": "BASIC",
+                    "serialNumber": "old-meter",
+                    "serialStatus": "Removed",
+                },
+                {
+                    "siteIdentifier": "NMI123",
+                    "meterReadType": "SMART",
+                    "serialNumber": "new-meter",
+                    "serialStatus": "Energized",
+                },
+            ],
+        },
+    )
+
+    assert selected is not None
+    assert selected["serialNumber"] == "new-meter"
+    assert selected["meterReadType"] == "SMART"
+
+
+def test_select_meter_preserves_order_for_equivalent_meters() -> None:
+    """Equivalent active meters keep the portal's first returned row."""
+    selected = select_meter_for_service(
+        {},
+        {
+            "data": [
+                {
+                    "meterReadType": "BASIC",
+                    "serialNumber": "first",
+                    "serialStatus": "Active",
+                },
+                {
+                    "meterReadType": "BASIC",
+                    "serialNumber": "second",
+                    "serialStatus": "Active",
+                },
+            ],
+        },
+    )
+
+    assert selected is not None
+    assert selected["serialNumber"] == "first"
 
 
 def test_cost_summary_net_daily_is_sum_not_last_row() -> None:
