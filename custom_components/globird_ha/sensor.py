@@ -12,9 +12,11 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfEnergy, UnitOfTemperature
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.event import async_track_time_change
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import dt as dt_util
 
 from .api import (
     build_billing_period_projection,
@@ -675,31 +677,136 @@ class GloBirdLatestDayCostSensor(GloBirdServiceBaseSensor):
         return attrs
 
 
+def _parse_summary_day(value: Any) -> date | None:
+    """Parse a cost-summary day value ('2026/06/28' or '2026-06-28')."""
+    if not value:
+        return None
+    text = str(value).split("T")[0].replace("/", "-")
+    try:
+        return date.fromisoformat(text)
+    except ValueError:
+        return None
+
+
 class GloBirdZeroHeroStatusSensor(GloBirdServiceBaseSensor):
-    """Latest day ZEROHERO credit status."""
+    """ZEROHERO credit status for the current local day.
+
+    States:
+      - achieved:        today's data shows a ZEROHERO credit
+      - missed:          today's data is complete and shows no credit
+      - pending:         the 18:00-21:00 window has not finished yet
+      - awaiting_result: window is over but the portal has not
+                         published (complete) data for today yet
+      - unknown:         no usable cost summary in the payload
+    """
 
     sensor_key = "zerohero_status"
     sensor_name = "ZeroHero Status"
     icon = "mdi:check-decagram"
+    device_class = SensorDeviceClass.ENUM
+
+    _attr_options = ["achieved", "missed", "pending", "awaiting_result", "unknown"]
+
+    WINDOW_END_HOUR = 21  # ZEROHERO window is 18:00-21:00 local time
+
+    async def async_added_to_hass(self) -> None:
+        """Register wall-clock listeners for the day/window boundaries.
+
+        native_value depends on the local time, but the entity only
+        re-renders on coordinator refreshes - force a state write at
+        midnight and at window end so pending/awaiting_result flip
+        promptly instead of lagging by up to one scan interval.
+        """
+        await super().async_added_to_hass()
+        self.async_on_remove(
+            async_track_time_change(
+                self.hass,
+                self._handle_time_boundary,
+                hour=[0, self.WINDOW_END_HOUR],
+                minute=0,
+                second=5,
+            )
+        )
+        # The coordinator's adaptive polling sleeps from when yesterday's
+        # data completes (~early morning) until 00:05 the next day, so the
+        # portal's ~21:15 publication of today's result would never be
+        # fetched the same evening. Poll for it after the window closes,
+        # stopping once today's result has landed.
+        self.async_on_remove(
+            async_track_time_change(
+                self.hass,
+                self._handle_result_poll,
+                hour=[21, 22, 23],
+                minute=[15, 35, 55],
+                second=0,
+            )
+        )
+
+    @callback
+    def _handle_result_poll(self, _now: datetime) -> None:
+        """Request a coordinator refresh until today's result arrives."""
+        if self.native_value in ("pending", "awaiting_result"):
+            self.hass.async_create_task(self.coordinator.async_request_refresh())
+
+    @callback
+    def _handle_time_boundary(self, _now: datetime) -> None:
+        """Re-evaluate state at midnight and window end."""
+        self.async_write_ha_state()
 
     @property
     def native_value(self) -> Any:
-        """Return whether the latest complete day received a ZEROHERO credit."""
+        """Return today's ZEROHERO outcome, or a pending state."""
         summary = self._service_detail().get("cost_summary") or {}
-        latest_day = summary.get("latest_day")
+        latest_day = _parse_summary_day(summary.get("latest_day"))
         credit = summary.get("latest_day_zerohero_credit")
         if latest_day is None or credit is None:
             return "unknown"
-        return "achieved" if summary.get("latest_day_zerohero_achieved") else "missed"
+
+        now = dt_util.now()  # HA-configured local timezone
+        today = now.date()
+        day_complete = bool(summary.get("latest_available_day_complete"))
+
+        if latest_day == today:
+            if summary.get("latest_day_zerohero_achieved"):
+                return "achieved"
+            # Only declare a miss once today's data is complete - a
+            # partial day without a credit row is not (yet) a miss.
+            if day_complete:
+                return "missed"
+            return "awaiting_result"
+
+        if latest_day < today:
+            # The portal has not published anything for today yet.
+            if now.hour < self.WINDOW_END_HOUR:
+                return "pending"
+            return "awaiting_result"
+
+        # latest_day is in the future relative to HA local time -
+        # clock/timezone mismatch; do not guess.
+        return "unknown"
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return ZEROHERO detail attributes."""
         attrs = self._service_attrs()
         summary = self._service_detail().get("cost_summary") or {}
+        latest_day = _parse_summary_day(summary.get("latest_day"))
+        last_result: str | None = None
+        if summary.get("latest_day_zerohero_credit") is not None:
+            last_result = (
+                "achieved"
+                if summary.get("latest_day_zerohero_achieved")
+                else "missed"
+            )
         attrs.update(
             {
                 "latest_day": summary.get("latest_day"),
+                "result_is_for_today": (
+                    latest_day == dt_util.now().date()
+                    if latest_day is not None
+                    else False
+                ),
+                "last_result": last_result,
                 "zerohero_credit": summary.get("latest_day_zerohero_credit"),
                 "latest_day_cost": summary.get("latest_day_amount"),
                 "latest_available_day": summary.get("latest_available_day"),
@@ -778,7 +885,7 @@ class GloBirdBillingPeriodDaysSensor(GloBirdServiceBaseSensor):
         start = _billing_period_start(self.coordinator.data or {})
         if start is None:
             return None
-        return max(0, (date.today() - start).days)
+        return max(0, (dt_util.now().date() - start).days)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
