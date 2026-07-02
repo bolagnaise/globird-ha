@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time as dt_time, timedelta, timezone
 from typing import Any, Callable
 
 from homeassistant.components.sensor import (
@@ -12,9 +12,11 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfEnergy, UnitOfTemperature
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.event import async_track_point_in_time
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import dt as dt_util
 
 from .api import (
     build_billing_period_projection,
@@ -27,6 +29,14 @@ from .const import DOMAIN
 from .coordinator import GloBirdCoordinator
 
 CURRENCY_AUD = "AUD"
+ZEROHERO_STATUS_OPTIONS = (
+    "achieved",
+    "missed",
+    "pending",
+    "awaiting_result",
+    "unknown",
+)
+ZEROHERO_RESULT_CUTOFF = dt_time(hour=21)
 
 
 def _latest_data_status(detail: dict[str, Any]) -> dict[str, Any]:
@@ -128,6 +138,82 @@ def _last_successful_refresh_value(data: dict[str, Any]) -> datetime | None:
 def _timestamp_attr(value: Any) -> str | None:
     timestamp = _timestamp_value(value)
     return timestamp.isoformat() if timestamp else None
+
+
+def _local_today() -> date:
+    """Return today's date in Home Assistant's configured timezone."""
+    return dt_util.now().date()
+
+
+def _parse_portal_day(value: Any) -> date | None:
+    """Parse a portal day string into a date."""
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    for separator in ("T", " "):
+        raw = raw.split(separator, 1)[0]
+    try:
+        return date.fromisoformat(raw.replace("/", "-"))
+    except ValueError:
+        return None
+
+
+def _billing_period_completed_days(
+    data: dict[str, Any],
+    today: date | None = None,
+) -> int | None:
+    """Return completed billing-period days using the local HA date."""
+    start = _billing_period_start(data)
+    if start is None:
+        return None
+    return max(0, ((today or _local_today()) - start).days)
+
+
+def _zerohero_last_result(
+    summary: dict[str, Any],
+) -> tuple[str, date | None, str | None]:
+    """Return the latest complete ZEROHERO result regardless of local day."""
+    latest_day_raw = summary.get("latest_day")
+    latest_day = _parse_portal_day(latest_day_raw)
+    credit = summary.get("latest_day_zerohero_credit")
+    if latest_day is None or credit is None:
+        return "unknown", latest_day, latest_day_raw
+    result = "achieved" if summary.get("latest_day_zerohero_achieved") else "missed"
+    return result, latest_day, latest_day_raw
+
+
+def _zerohero_status(
+    summary: dict[str, Any],
+    now: datetime | None = None,
+) -> str:
+    """Return today's ZEROHERO state using Home Assistant local time."""
+    current = now or dt_util.now()
+    last_result, latest_day, _latest_day_raw = _zerohero_last_result(summary)
+    if last_result == "unknown" or latest_day is None:
+        return "unknown"
+    if latest_day == current.date():
+        return last_result
+    if current.time() < ZEROHERO_RESULT_CUTOFF:
+        return "pending"
+    return "awaiting_result"
+
+
+def _next_zerohero_status_boundary(now: datetime) -> datetime:
+    """Return the next local boundary where ZEROHERO status can change."""
+    today_cutoff = datetime.combine(
+        now.date(),
+        ZEROHERO_RESULT_CUTOFF,
+        tzinfo=now.tzinfo,
+    )
+    if now < today_cutoff:
+        return today_cutoff
+    return datetime.combine(
+        now.date() + timedelta(days=1),
+        dt_time.min,
+        tzinfo=now.tzinfo,
+    )
 
 
 def _refresh_status_value(data: dict[str, Any]) -> str:
@@ -676,32 +762,74 @@ class GloBirdLatestDayCostSensor(GloBirdServiceBaseSensor):
 
 
 class GloBirdZeroHeroStatusSensor(GloBirdServiceBaseSensor):
-    """Latest day ZEROHERO credit status."""
+    """Local-day ZEROHERO credit status."""
 
     sensor_key = "zerohero_status"
     sensor_name = "ZeroHero Status"
     icon = "mdi:check-decagram"
+    device_class = SensorDeviceClass.ENUM
+    _attr_options = list(ZEROHERO_STATUS_OPTIONS)
+
+    def __init__(
+        self,
+        coordinator: GloBirdCoordinator,
+        config_entry: ConfigEntry,
+        service: dict[str, Any],
+    ) -> None:
+        """Initialize the sensor."""
+        super().__init__(coordinator, config_entry, service)
+        self._zerohero_boundary_unsub: Callable[[], None] | None = None
+
+    async def async_added_to_hass(self) -> None:
+        """Schedule state refreshes at local ZEROHERO day boundaries."""
+        await super().async_added_to_hass()
+        self.async_on_remove(self._cancel_zerohero_boundary_update)
+        self._schedule_zerohero_boundary_update()
+
+    def _cancel_zerohero_boundary_update(self) -> None:
+        """Cancel the pending ZEROHERO boundary update."""
+        if self._zerohero_boundary_unsub is not None:
+            self._zerohero_boundary_unsub()
+            self._zerohero_boundary_unsub = None
+
+    def _schedule_zerohero_boundary_update(self) -> None:
+        """Schedule the next local time boundary update."""
+        self._cancel_zerohero_boundary_update()
+        self._zerohero_boundary_unsub = async_track_point_in_time(
+            self.hass,
+            self._handle_zerohero_boundary_update,
+            _next_zerohero_status_boundary(dt_util.now()),
+        )
+
+    @callback
+    def _handle_zerohero_boundary_update(self, _now: datetime) -> None:
+        """Refresh the entity when the local day/window state changes."""
+        self.async_write_ha_state()
+        self._schedule_zerohero_boundary_update()
 
     @property
     def native_value(self) -> Any:
-        """Return whether the latest complete day received a ZEROHERO credit."""
+        """Return today's ZEROHERO status."""
         summary = self._service_detail().get("cost_summary") or {}
-        latest_day = summary.get("latest_day")
-        credit = summary.get("latest_day_zerohero_credit")
-        if latest_day is None or credit is None:
-            return "unknown"
-        return "achieved" if summary.get("latest_day_zerohero_achieved") else "missed"
+        return _zerohero_status(summary)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return ZEROHERO detail attributes."""
         attrs = self._service_attrs()
         summary = self._service_detail().get("cost_summary") or {}
+        now = dt_util.now()
+        last_result, latest_day, latest_day_raw = _zerohero_last_result(summary)
         attrs.update(
             {
                 "latest_day": summary.get("latest_day"),
                 "zerohero_credit": summary.get("latest_day_zerohero_credit"),
                 "latest_day_cost": summary.get("latest_day_amount"),
+                "result_is_for_today": (
+                    latest_day is not None and latest_day == now.date()
+                ),
+                "last_result": last_result,
+                "last_result_day": latest_day_raw,
                 "latest_available_day": summary.get("latest_available_day"),
                 "latest_available_day_complete": summary.get(
                     "latest_available_day_complete"
@@ -716,7 +844,7 @@ class GloBirdExpectedMonthlyCostSensor(GloBirdServiceBaseSensor):
 
     sensor_key = "expected_month_cost"
     sensor_name = "Expected Monthly Cost"
-    icon = "mdi:cash-calendar"
+    icon = "mdi:cash-clock"
     native_unit_of_measurement = CURRENCY_AUD
     device_class = SensorDeviceClass.MONETARY
     state_class = None
@@ -778,7 +906,7 @@ class GloBirdBillingPeriodDaysSensor(GloBirdServiceBaseSensor):
         start = _billing_period_start(self.coordinator.data or {})
         if start is None:
             return None
-        return max(0, (date.today() - start).days)
+        return _billing_period_completed_days(self.coordinator.data or {})
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
