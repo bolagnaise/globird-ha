@@ -188,16 +188,11 @@ def _zerohero_status(
     summary: dict[str, Any],
     now: datetime | None = None,
 ) -> str:
-    """Return today's ZEROHERO state using Home Assistant local time."""
-    current = now or dt_util.now()
+    """Return the latest complete ZEROHERO portal result."""
     last_result, latest_day, _latest_day_raw = _zerohero_last_result(summary)
     if last_result == "unknown" or latest_day is None:
         return "unknown"
-    if latest_day == current.date():
-        return last_result
-    if current.time() < ZEROHERO_RESULT_CUTOFF:
-        return "pending"
-    return "awaiting_result"
+    return last_result
 
 
 def _next_zerohero_status_boundary(now: datetime) -> datetime:
@@ -809,7 +804,7 @@ class GloBirdZeroHeroStatusSensor(GloBirdServiceBaseSensor):
 
     @property
     def native_value(self) -> Any:
-        """Return today's ZEROHERO status."""
+        """Return the latest complete ZEROHERO status."""
         summary = self._service_detail().get("cost_summary") or {}
         return _zerohero_status(summary)
 

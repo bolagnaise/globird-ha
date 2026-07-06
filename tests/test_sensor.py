@@ -187,8 +187,8 @@ def test_billing_period_days_uses_home_assistant_local_date(monkeypatch: Any) ->
     assert sensor._billing_period_completed_days(data) == 1
 
 
-def test_zerohero_status_reports_today_result_only_when_result_is_for_today() -> None:
-    """Achieved/missed should only be used for the current local day."""
+def test_zerohero_status_reports_latest_complete_result() -> None:
+    """Achieved/missed should follow the latest complete portal result."""
     local_tz = timezone(timedelta(hours=10))
     yesterday_summary = {
         "latest_day": "2026/07/01",
@@ -201,14 +201,14 @@ def test_zerohero_status_reports_today_result_only_when_result_is_for_today() ->
             yesterday_summary,
             datetime(2026, 7, 2, 20, 59, tzinfo=local_tz),
         )
-        == "pending"
+        == "missed"
     )
     assert (
         sensor._zerohero_status(
             yesterday_summary,
             datetime(2026, 7, 2, 21, 0, tzinfo=local_tz),
         )
-        == "awaiting_result"
+        == "missed"
     )
 
     today_summary = {
