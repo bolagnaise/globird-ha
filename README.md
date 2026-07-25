@@ -37,7 +37,7 @@ If **GloBird HA** does not appear in the Add integration search after installing
 
 ## Entities
 
-The integration creates one config entry and discovers all electricity accounts/services returned by the portal.
+The integration creates one config entry and discovers all active services returned by the portal.
 
 Account-level sensors include:
 
@@ -67,7 +67,16 @@ Service-level sensors include:
 - Billing period cost
 - Weather summary
 
+Gas service-level sensors include:
+
+- Service status
+- Meter info
+- Latest gas reading
+- Latest gas reading date
+
 Recorder-safe daily summaries, the latest interval array, compact usage register totals, cost category totals, daily net cost totals, and incomplete cost days are exposed as sensor attributes. Daily usage and cost attributes keep the most recent rows and include count/truncation flags; full cached snapshots are available through Home Assistant diagnostics with sensitive fields redacted.
+
+For gas services, historical basic-meter readings are also imported into Home Assistant recorder long-term statistics so historical charts can be populated from existing portal read history.
 
 ## Updates and data freshness
 

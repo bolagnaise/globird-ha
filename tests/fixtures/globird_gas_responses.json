@@ -1,0 +1,53 @@
+{
+    "gas_reading_summary_payload": {
+        "data": {
+            "Invoice Read Data": [
+                {
+                    "readIndex": 2936.0,
+                    "readDate": "2026/01/05",
+                    "serial": "TEST-METER-001",
+                    "minQualityMethod": "A"
+                },
+                {
+                    "readIndex": 3050.0,
+                    "readDate": "2026/07/12",
+                    "serial": "TEST-METER-001",
+                    "minQualityMethod": "G"
+                }
+            ],
+            "Distributor Read/Self Read Data": [
+                {
+                    "readIndex": 3043.0,
+                    "readDate": "2026/06/29",
+                    "serial": "TEST-METER-001",
+                    "minQualityMethod": "A"
+                }
+            ]
+        }
+    },
+    "gas_service_data": {
+        "service": {
+            "accountServiceId": 123456,
+            "siteIdentifier": "TEST-MIRN-001",
+            "siteAddress": "Gas Site",
+            "serviceType": "Gas",
+            "accountId": 100001,
+            "accountNumber": "ACC-TEST-001"
+        },
+        "gas_reading_summary": {
+            "latest_reading": 3050.0,
+            "latest_reading_date": "2026-07-12",
+            "latest_reading_source": "Invoice Read Data",
+            "latest_reading_serial": "TEST-METER-001",
+            "latest_reading_quality_method": "G",
+            "history_recent": [
+                {
+                    "date": "2026-07-12",
+                    "read_index": 3050.0
+                }
+            ],
+            "history_count": 1,
+            "history_truncated": false
+        }
+    }
+}

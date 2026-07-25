@@ -1,4 +1,5 @@
 """GloBird customer portal API client and data helpers."""
+
 from __future__ import annotations
 
 import base64
@@ -186,9 +187,7 @@ def cost_attributes(summary: dict[str, Any]) -> dict[str, Any]:
         "total_quantity": summary.get("total_quantity"),
         "latest_day": summary.get("latest_day"),
         "latest_available_day": summary.get("latest_available_day"),
-        "latest_available_day_complete": summary.get(
-            "latest_available_day_complete"
-        ),
+        "latest_available_day_complete": summary.get("latest_available_day_complete"),
         "incomplete_days": summary.get("incomplete_days", []),
         "daily": _recent_rows(daily_rows),
         "daily_count": len(daily_rows),
@@ -204,7 +203,7 @@ def cost_attributes(summary: dict[str, Any]) -> dict[str, Any]:
 def extract_accounts_and_services(
     current_user_payload: dict[str, Any] | None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Extract accounts and electricity services from currentuser payload."""
+    """Extract accounts and active services from currentuser payload."""
     data = _payload_data(current_user_payload) or {}
     accounts: list[dict[str, Any]] = []
     services: list[dict[str, Any]] = []
@@ -226,31 +225,24 @@ def extract_accounts_and_services(
             if svc_status == "closed":
                 continue
 
-            service_type = str(service.get("serviceType") or "").lower()
-            if service_type and not any(
-                marker in service_type for marker in ("power", "electric")
-            ):
-                continue
-
             enriched = dict(service)
             enriched["accountId"] = account_id
             enriched["accountNumber"] = account.get("accountNumber")
             enriched["accountAddress"] = account.get("accountAddress")
             services.append(enriched)
 
-    if not services:
-        for account in data.get("accounts", []) or []:
-            for service in account.get("services", []) or []:
-                if service.get("closedDate"):
-                    continue
-                svc_status = str(service.get("status") or "").lower()
-                if svc_status == "closed":
-                    continue
-                enriched = dict(service)
-                enriched["accountId"] = account.get("accountId")
-                enriched["accountNumber"] = account.get("accountNumber")
-                enriched["accountAddress"] = account.get("accountAddress")
-                services.append(enriched)
+    # Prefer power/electric services first to keep existing endpoint selection
+    # behavior for mixed-service accounts.
+    services.sort(
+        key=lambda service: (
+            0
+            if any(
+                marker in str(service.get("serviceType") or "").lower()
+                for marker in ("power", "electric")
+            )
+            else 1
+        )
+    )
 
     return accounts, services
 
@@ -332,7 +324,8 @@ def select_meter_for_service(
     identifier = str(service.get("siteIdentifier") or "")
     if identifier:
         matched = [
-            m for m in meters
+            m
+            for m in meters
             if str(m.get("siteIdentifier") or m.get("nmi") or "") == identifier
         ]
         if matched:
@@ -390,15 +383,21 @@ def _build_register_summary(
             else:
                 for i, v in enumerate(arr):
                     if i < len(existing):
-                        existing[i] = (_as_float(existing[i]) or 0.0) + (_as_float(v) or 0.0)
+                        existing[i] = (_as_float(existing[i]) or 0.0) + (
+                            _as_float(v) or 0.0
+                        )
 
     total = sum(v["usage"] for v in by_date.values())
     latest_date = max(by_date) if by_date else None
     latest_entry = by_date[latest_date] if latest_date else None
 
     daily = [
-        {"readDate": v["readDate"], "usage": _round(v["usage"]),
-         "meterStatus": v["meterStatus"], "minQualityMethod": v["minQualityMethod"]}
+        {
+            "readDate": v["readDate"],
+            "usage": _round(v["usage"]),
+            "meterStatus": v["meterStatus"],
+            "minQualityMethod": v["minQualityMethod"],
+        }
         for v in sorted(by_date.values(), key=lambda x: x["readDate"])
     ]
 
@@ -512,6 +511,63 @@ def build_usage_summary(
     }
 
 
+def build_gas_reading_summary(
+    usage_payload: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Build a summary for gas basic meter index readings."""
+    rows = _payload_data(usage_payload)
+    if not isinstance(rows, dict):
+        rows = {}
+
+    history: list[dict[str, Any]] = []
+    for source, source_rows in rows.items():
+        if not isinstance(source_rows, list):
+            continue
+
+        for row in source_rows:
+            if not isinstance(row, dict):
+                continue
+
+            reading = _as_float(row.get("readIndex"))
+            read_day = _parse_date(row.get("readDate"))
+            if reading is None or read_day is None:
+                continue
+
+            history.append(
+                {
+                    "date": read_day.isoformat(),
+                    "read_index": _round(reading, 6),
+                    "source": source,
+                    "serial": row.get("serial"),
+                    "quality_method": row.get("minQualityMethod"),
+                }
+            )
+
+    history.sort(
+        key=lambda row: (
+            str(row.get("date") or ""),
+            float(row.get("read_index") or 0.0),
+            str(row.get("source") or ""),
+        )
+    )
+
+    latest = history[-1] if history else None
+    recent = _recent_rows(history)
+    return {
+        "latest_reading": latest.get("read_index") if latest else None,
+        "latest_reading_date": latest.get("date") if latest else None,
+        "latest_reading_source": latest.get("source") if latest else None,
+        "latest_reading_serial": latest.get("serial") if latest else None,
+        "latest_reading_quality_method": (
+            latest.get("quality_method") if latest else None
+        ),
+        "history": history,
+        "history_recent": recent,
+        "history_count": len(history),
+        "history_truncated": len(history) > ATTR_RECENT_ROW_LIMIT,
+    }
+
+
 def build_cost_summary(cost_payload: dict[str, Any] | None) -> dict[str, Any]:
     """Build recorder-safe cost summary."""
     rows = _payload_data(cost_payload)
@@ -532,9 +588,7 @@ def build_cost_summary(cost_payload: dict[str, Any] | None) -> dict[str, Any]:
             grouped_rows.setdefault(dk, []).append(raw_row)
 
     complete_days = {
-        day
-        for day, day_rows in grouped_rows.items()
-        if _is_complete_cost_day(day_rows)
+        day for day, day_rows in grouped_rows.items() if _is_complete_cost_day(day_rows)
     }
     latest_available_day = max(grouped_rows) if grouped_rows else None
     latest_day = max(complete_days) if complete_days else None
@@ -581,8 +635,7 @@ def build_cost_summary(cost_payload: dict[str, Any] | None) -> dict[str, Any]:
             e["amount"]
             for e in daily
             if e["date"] == latest_day
-            and str(e.get("chargeCategory") or "").strip().lower()
-            == "zerohero credit"
+            and str(e.get("chargeCategory") or "").strip().lower() == "zerohero credit"
         )
         latest_day_zerohero_credit = _round(zerohero_total, 2)
 
@@ -953,7 +1006,12 @@ class GloBirdClient:
             )
         except GloBirdSessionExpired:
             self._authenticated = False
-            if not retry_auth or not self._reauth_enabled or not self._email or not self._password:
+            if (
+                not retry_auth
+                or not self._reauth_enabled
+                or not self._email
+                or not self._password
+            ):
                 raise
             _LOGGER.info("GloBird session expired; attempting re-login")
             await self.authenticate(self._email, self._password, fresh_session=False)
@@ -1054,7 +1112,9 @@ class GloBirdClient:
         self._email = email
         self._password = password
         try:
-            current_user = await self._raw_request_json("GET", "/api/account/currentuser")
+            current_user = await self._raw_request_json(
+                "GET", "/api/account/currentuser"
+            )
         except GloBirdApiError:
             self._authenticated = False
             return None
@@ -1065,21 +1125,27 @@ class GloBirdClient:
         """Fetch the current user payload."""
         return await self._request_json("GET", "/api/account/currentuser")
 
-    async def get_dashboard(self, *, account_id: int | str | None = None) -> dict[str, Any]:
+    async def get_dashboard(
+        self, *, account_id: int | str | None = None
+    ) -> dict[str, Any]:
         """Fetch dashboard account data."""
         path = "/api/account/dashboard"
         if account_id is not None:
             path = f"{path}?accountId={account_id}"
         return await self._request_json("GET", path)
 
-    async def get_balance(self, *, account_id: int | str | None = None) -> dict[str, Any]:
+    async def get_balance(
+        self, *, account_id: int | str | None = None
+    ) -> dict[str, Any]:
         """Fetch account balance data."""
         path = "/api/transaction/balance"
         if account_id is not None:
             path = f"{path}?accountId={account_id}"
         return await self._request_json("GET", path)
 
-    async def get_signup_info(self, *, account_id: int | str | None = None) -> dict[str, Any]:
+    async def get_signup_info(
+        self, *, account_id: int | str | None = None
+    ) -> dict[str, Any]:
         """Fetch signup/service information."""
         path = "/api/account/getSignupInfo"
         if account_id is not None:
@@ -1097,7 +1163,9 @@ class GloBirdClient:
             path = f"{path}?nmi={nmi}"
         return await self._request_json("GET", path)
 
-    async def get_read_meters(self, *, account_service_id: int | str | None = None) -> dict[str, Any]:
+    async def get_read_meters(
+        self, *, account_service_id: int | str | None = None
+    ) -> dict[str, Any]:
         """Fetch meter read metadata."""
         path = "/api/site/readmeters"
         if account_service_id is not None:
@@ -1113,9 +1181,13 @@ class GloBirdClient:
         is_smart: bool = True,
         days: int = DEFAULT_USAGE_DAYS,
     ) -> dict[str, Any]:
-        """Fetch smart meter usage data."""
+        """Fetch usage data for smart or basic meters."""
         from_slash, to_slash, *_ = date_range_for_usage(days)
-        path = "/api/site/accountservicetimezonesmartmeterread"
+        path = (
+            "/api/site/accountservicetimezonesmartmeterread"
+            if is_smart
+            else "/api/site/basicmeterread"
+        )
         if account_service_id is not None:
             path = f"{path}?accountServiceId={account_service_id}"
         return await self._request_json(
@@ -1173,7 +1245,9 @@ class GloBirdClient:
             },
         )
 
-    async def get_weather_impacted_days(self, *, account_id: int | str | None = None) -> dict[str, Any]:
+    async def get_weather_impacted_days(
+        self, *, account_id: int | str | None = None
+    ) -> dict[str, Any]:
         """Fetch weather impacted day count."""
         path = "/api/weather/calculateweatherimpacteddays"
         if account_id is not None:
@@ -1213,9 +1287,7 @@ class GloBirdClient:
                 morsel[name]["httponly"] = True
 
             domain = cookie.get("domain", "").lstrip(".") or URL(self._base_url).host
-            self._session.cookie_jar.update_cookies(
-                morsel, URL(f"https://{domain}/")
-            )
+            self._session.cookie_jar.update_cookies(morsel, URL(f"https://{domain}/"))
 
     @staticmethod
     def decode_html_json(value: str) -> Any:

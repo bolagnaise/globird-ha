@@ -1,4 +1,5 @@
 """Tests for GloBird coordinator scheduling helpers."""
+
 from __future__ import annotations
 
 import importlib
@@ -127,3 +128,30 @@ def test_update_interval_slows_only_when_daily_data_is_ready(monkeypatch: Any) -
     )
 
     assert instance.update_interval == coordinator.ACCOUNT_UPDATE_INTERVAL
+
+
+def test_expected_optional_fetch_failure_classification() -> None:
+    """Known AccountServiceStatus endpoint failures should be treated as expected."""
+    assert (
+        coordinator._is_expected_optional_fetch_failure(
+            "service_status",
+            RuntimeError("Unable to get AccountServiceStatus."),
+        )
+        is True
+    )
+
+    assert (
+        coordinator._is_expected_optional_fetch_failure(
+            "service_status",
+            RuntimeError("temporary timeout"),
+        )
+        is False
+    )
+
+    assert (
+        coordinator._is_expected_optional_fetch_failure(
+            "balance",
+            RuntimeError("Unable to get AccountServiceStatus."),
+        )
+        is False
+    )
