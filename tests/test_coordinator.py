@@ -1,6 +1,8 @@
 """Tests for GloBird coordinator scheduling helpers."""
+
 from __future__ import annotations
 
+import asyncio
 import importlib
 import sys
 import types
@@ -127,3 +129,138 @@ def test_update_interval_slows_only_when_daily_data_is_ready(monkeypatch: Any) -
     )
 
     assert instance.update_interval == coordinator.ACCOUNT_UPDATE_INTERVAL
+
+
+def test_update_interval_ignores_gas_readiness(monkeypatch: Any) -> None:
+    """Gas reads are not daily electricity data and must not prevent slow polling."""
+    now = datetime(2026, 6, 29, 10, 30, tzinfo=timezone.utc)
+    monkeypatch.setattr(coordinator.dt_util, "now", lambda: now)
+
+    instance = object.__new__(coordinator.GloBirdCoordinator)
+    instance.update_interval = coordinator.ACCOUNT_UPDATE_INTERVAL
+    instance._set_update_interval_for_data(
+        {
+            "service_data": {
+                "power": {
+                    "service": {"serviceType": "Power"},
+                    "latest_data_status": {
+                        "status": "ready",
+                        "latest_ready_day": "2026/06/28",
+                    },
+                },
+                "gas": {
+                    "service": {"serviceType": "Gas"},
+                    "latest_data_status": {
+                        "status": "no_data",
+                        "latest_ready_day": None,
+                    },
+                },
+            }
+        }
+    )
+
+    assert instance.update_interval == timedelta(hours=13, minutes=35)
+
+    instance.update_interval = coordinator.ACCOUNT_UPDATE_INTERVAL
+    instance._set_update_interval_for_data(
+        {
+            "service_data": {
+                "gas": {
+                    "service": {"serviceType": "Gas"},
+                    "latest_data_status": {
+                        "status": "no_data",
+                        "latest_ready_day": None,
+                    },
+                }
+            }
+        }
+    )
+
+    assert instance.update_interval == timedelta(hours=13, minutes=35)
+
+
+def test_gas_service_fetches_its_own_meter_and_forces_basic_endpoint() -> None:
+    """Mixed accounts must not reuse the primary electricity service's meter."""
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.read_meter_ids: list[int] = []
+            self.usage_calls: list[dict[str, Any]] = []
+
+        async def get_read_meters(
+            self, *, account_service_id: int
+        ) -> dict[str, Any]:
+            self.read_meter_ids.append(account_service_id)
+            return {
+                "data": [
+                    {
+                        "siteIdentifier": "MIRN-GAS",
+                        "serialNumber": "gas-meter",
+                        "meterReadType": "BASIC",
+                        "serialStatus": "Active",
+                    }
+                ]
+            }
+
+        async def get_usage(self, **kwargs: Any) -> dict[str, Any]:
+            self.usage_calls.append(kwargs)
+            return {"data": {}, "success": True}
+
+        async def get_cost_detail(self, **_kwargs: Any) -> dict[str, Any]:
+            return {"data": [], "success": True}
+
+    instance = object.__new__(coordinator.GloBirdCoordinator)
+    instance.client = FakeClient()
+    result = asyncio.run(
+        instance._fetch_service_detail(
+            {
+                "accountServiceId": 11,
+                "siteIdentifier": "MIRN-GAS",
+                "serviceType": "Gas",
+            },
+            {
+                "data": [
+                    {
+                        "siteIdentifier": "NMI-POWER",
+                        "serialNumber": "power-meter",
+                        "meterReadType": "SMART",
+                        "serialStatus": "Active",
+                    }
+                ]
+            },
+            None,
+            {},
+        )
+    )
+
+    assert instance.client.read_meter_ids == [11]
+    assert instance.client.usage_calls[0]["serial_number"] == "gas-meter"
+    assert instance.client.usage_calls[0]["is_smart"] is False
+    assert result["meter"]["serialNumber"] == "gas-meter"
+
+
+def test_expected_optional_fetch_failure_classification() -> None:
+    """Known AccountServiceStatus endpoint failures should be treated as expected."""
+    assert (
+        coordinator._is_expected_optional_fetch_failure(
+            "service_status",
+            RuntimeError("Unable to get AccountServiceStatus."),
+        )
+        is True
+    )
+
+    assert (
+        coordinator._is_expected_optional_fetch_failure(
+            "service_status",
+            RuntimeError("temporary timeout"),
+        )
+        is False
+    )
+
+    assert (
+        coordinator._is_expected_optional_fetch_failure(
+            "balance",
+            RuntimeError("Unable to get AccountServiceStatus."),
+        )
+        is False
+    )

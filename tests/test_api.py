@@ -1,4 +1,5 @@
 """Tests for the GloBird API helpers."""
+
 from __future__ import annotations
 
 import asyncio
@@ -13,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "globird_responses.json"
+GAS_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "globird_gas_responses.json"
 COMPONENT_PATH = Path(__file__).parents[1] / "custom_components"
 INTEGRATION_PATH = COMPONENT_PATH / "globird_ha"
 
@@ -30,6 +32,7 @@ GloBirdAuthError = api.GloBirdAuthError
 GloBirdClient = api.GloBirdClient
 build_cost_summary = api.build_cost_summary
 build_billing_period_projection = api.build_billing_period_projection
+build_gas_reading_summary = api.build_gas_reading_summary
 build_latest_data_status = api.build_latest_data_status
 build_usage_summary = api.build_usage_summary
 build_weather_summary = api.build_weather_summary
@@ -44,6 +47,11 @@ usage_attributes = api.usage_attributes
 def load_fixtures() -> dict[str, Any]:
     """Load sanitized fixture payloads."""
     return json.loads(FIXTURE_PATH.read_text())
+
+
+def load_gas_fixtures() -> dict[str, Any]:
+    """Load dedicated gas fixture payloads."""
+    return json.loads(GAS_FIXTURE_PATH.read_text())
 
 
 class FakeResponse:
@@ -180,8 +188,7 @@ def test_session_expiry_reauthenticates_once() -> None:
 
     assert result["data"]["balance"] == 123.45
     requested_paths = [
-        request[1].replace("https://example.test", "")
-        for request in session.requests
+        request[1].replace("https://example.test", "") for request in session.requests
     ]
     assert requested_paths == [
         "/api/account/login",
@@ -191,6 +198,28 @@ def test_session_expiry_reauthenticates_once() -> None:
         "/api/account/currentuser",
         "/api/transaction/balance",
     ]
+
+
+def test_get_usage_uses_basic_meter_endpoint_for_non_smart_meter() -> None:
+    """Gas/basic services should use /api/site/basicmeterread."""
+    session = FakeSession([(200, {"data": {}, "success": True})])
+    client = GloBirdClient(session=session, base_url="https://example.test")
+    account_service_id = 123456
+
+    asyncio.run(
+        client.get_usage(
+            identifier="TEST-MIRN-001",
+            serial_number="TEST-METER-001",
+            account_service_id=account_service_id,
+            is_smart=False,
+            days=31,
+        )
+    )
+
+    assert session.requests[0][0] == "POST"
+    assert session.requests[0][1].endswith(
+        f"/api/site/basicmeterread?accountServiceId={account_service_id}"
+    )
 
 
 def test_extract_accounts_services_and_summaries() -> None:
@@ -215,6 +244,80 @@ def test_extract_accounts_services_and_summaries() -> None:
     assert cost["latest_available_day"] == "2026/04/02"
     assert cost["latest_available_day_complete"] is True
     assert weather["latest_max_temp"] == 29
+
+
+def test_extract_accounts_and_services_includes_active_gas_services() -> None:
+    """Mixed accounts should retain active gas services."""
+    payload = {
+        "data": {
+            "accounts": [
+                {
+                    "accountId": 1,
+                    "accountNumber": "A001",
+                    "accountAddress": "Address",
+                    "services": [
+                        {
+                            "accountServiceId": 10,
+                            "serviceType": "Power",
+                            "status": "Switched",
+                        },
+                        {
+                            "accountServiceId": 11,
+                            "serviceType": "Gas",
+                            "status": "Switched",
+                        },
+                        {
+                            "accountServiceId": 12,
+                            "serviceType": "Gas",
+                            "status": "Closed",
+                        },
+                        {
+                            "accountServiceId": 13,
+                            "serviceType": "Internet",
+                            "status": "Switched",
+                        },
+                    ],
+                }
+            ]
+        }
+    }
+
+    _, services = extract_accounts_and_services(payload)
+
+    assert [service["accountServiceId"] for service in services] == [10, 11]
+
+
+def test_select_meter_rejects_another_services_identified_meter() -> None:
+    """A scoped response for another service must not be used as a fallback."""
+    selected = select_meter_for_service(
+        {"siteIdentifier": "MIRN-GAS"},
+        {
+            "data": [
+                {
+                    "siteIdentifier": "NMI-POWER",
+                    "meterReadType": "SMART",
+                    "serialNumber": "power-meter",
+                    "serialStatus": "Active",
+                }
+            ]
+        },
+    )
+
+    assert selected is None
+
+
+def test_build_gas_reading_summary_tracks_latest_reading_and_history() -> None:
+    """Gas summaries should expose the latest read index and recorder-safe history."""
+    payload = load_gas_fixtures()["gas_reading_summary_payload"]
+
+    summary = build_gas_reading_summary(payload)
+
+    assert summary["latest_reading"] == 3050.0
+    assert summary["latest_reading_date"] == "2026-07-12"
+    assert summary["latest_reading_source"] == "Invoice Read Data"
+    assert summary["latest_reading_serial"] == "TEST-METER-001"
+    assert summary["history_count"] == 3
+    assert summary["history_recent"][-1]["read_index"] == 3050.0
 
 
 def test_select_meter_prefers_energized_smart_over_removed_basic() -> None:
@@ -272,9 +375,27 @@ def test_cost_summary_net_daily_is_sum_not_last_row() -> None:
     """latest_day_amount sums all rows for the day — not just the last row (SUPPLY charge)."""
     payload = {
         "data": [
-            {"chargeCategory": "SOLAR",  "chargeType": None, "date": "2026/04/24", "amount": -3.12, "quantity": 21.0},
-            {"chargeCategory": "USAGE",  "chargeType": None, "date": "2026/04/24", "amount":  0.21, "quantity": 47.0},
-            {"chargeCategory": "SUPPLY", "chargeType": None, "date": "2026/04/24", "amount":  1.40, "quantity":  0.0},
+            {
+                "chargeCategory": "SOLAR",
+                "chargeType": None,
+                "date": "2026/04/24",
+                "amount": -3.12,
+                "quantity": 21.0,
+            },
+            {
+                "chargeCategory": "USAGE",
+                "chargeType": None,
+                "date": "2026/04/24",
+                "amount": 0.21,
+                "quantity": 47.0,
+            },
+            {
+                "chargeCategory": "SUPPLY",
+                "chargeType": None,
+                "date": "2026/04/24",
+                "amount": 1.40,
+                "quantity": 0.0,
+            },
         ],
         "message": None,
         "success": True,
@@ -704,7 +825,11 @@ def load_tests(
         test_authenticate_captcha_required,
         test_authenticate_invalid_credentials,
         test_session_expiry_reauthenticates_once,
+        test_get_usage_uses_basic_meter_endpoint_for_non_smart_meter,
         test_extract_accounts_services_and_summaries,
+        test_extract_accounts_and_services_includes_active_gas_services,
+        test_select_meter_rejects_another_services_identified_meter,
+        test_build_gas_reading_summary_tracks_latest_reading_and_history,
         test_cost_summary_net_daily_is_sum_not_last_row,
         test_cost_summary_ignores_supply_only_partial_latest_day,
         test_usage_summary_tracks_all_registers_and_b_exports,

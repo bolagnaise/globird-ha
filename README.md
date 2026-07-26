@@ -37,7 +37,7 @@ If **GloBird HA** does not appear in the Add integration search after installing
 
 ## Entities
 
-The integration creates one config entry and discovers all electricity accounts/services returned by the portal.
+The integration creates one config entry and discovers all active services returned by the portal.
 
 Account-level sensors include:
 
@@ -67,11 +67,20 @@ Service-level sensors include:
 - Billing period cost
 - Weather summary
 
+Gas service-level sensors include:
+
+- Service status
+- Meter info
+- Latest gas reading
+- Latest gas reading date
+
 Recorder-safe daily summaries, the latest interval array, compact usage register totals, cost category totals, daily net cost totals, and incomplete cost days are exposed as sensor attributes. Daily usage and cost attributes keep the most recent rows and include count/truncation flags; full cached snapshots are available through Home Assistant diagnostics with sensitive fields redacted.
+
+For gas services, historical basic-meter readings are also imported into Home Assistant recorder long-term statistics so historical charts can be populated from existing portal read history. Meter replacements and corrected lower reads are handled without losing subsequent consumption.
 
 ## Updates and data freshness
 
-Home Assistant polls the GloBird portal every 30 minutes until all discovered services have `ready` latest data for yesterday or newer. Once the daily data is ready, polling slows until just after midnight on the next day to avoid unnecessary portal requests and repeated recorder updates for data that will not change again that day. You can still force a check at any time with Home Assistant's standard **Update entity** action on any GloBird entity. Refresh Status only reports whether the latest portal fetch completed; it does not mean GloBird has finished publishing all derived daily usage, cost, and ZeroHero values.
+Home Assistant polls the GloBird portal every 30 minutes until all discovered electricity services have `ready` latest data for yesterday or newer. Gas services do not block that readiness check because basic-meter reads are not published daily. Once the electricity data is ready, or after a successful refresh for a gas-only account, polling slows until just after midnight on the next day to avoid unnecessary portal requests and repeated recorder updates for data that will not change again that day. You can still force a check at any time with Home Assistant's standard **Update entity** action on any GloBird entity. Refresh Status only reports whether the latest portal fetch completed; it does not mean GloBird has finished publishing all derived daily usage, cost, and ZeroHero values.
 
 GloBird usage and cost data normally trails by at least one day, and the portal can publish a fixed supply-charge row before the rest of that day's usage/export rows are ready. To avoid showing that early partial value as the latest daily cost, the integration only advances Latest Daily Cost to the newest cost date that has more than the fixed `SUPPLY` row. Latest Data Date only advances when usage and complete cost data are aligned for the same day. Latest Data Status reports `ready`, `waiting_for_cost`, `waiting_for_usage`, or `no_data` for automations that need to wait until a daily notification can safely use the latest date, cost, and ZeroHero sensors. If a newer incomplete date is visible from the portal, it is exposed in attributes on Latest Data Date, Latest Data Status, and cost sensors as `latest_available_day`, `latest_available_day_complete`, and `incomplete_days`.
 

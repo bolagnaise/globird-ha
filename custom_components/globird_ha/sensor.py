@@ -1,22 +1,30 @@
 """Sensor entities for GloBird HA."""
+
 from __future__ import annotations
 
+import logging
+import re
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date, datetime, time as dt_time, timedelta, timezone
-from typing import Any, Callable
+from datetime import date, datetime, timedelta, timezone
+from datetime import time as dt_time
+from inspect import isawaitable
+from typing import Any
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
     SensorStateClass,
 )
+from homeassistant.components.recorder.models import StatisticMeanType
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import UnitOfEnergy, UnitOfTemperature
+from homeassistant.const import UnitOfEnergy, UnitOfTemperature, UnitOfVolume
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_point_in_time
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
+from homeassistant.util.unit_conversion import VolumeConverter
 
 from .api import (
     build_billing_period_projection,
@@ -29,6 +37,7 @@ from .const import DOMAIN
 from .coordinator import GloBirdCoordinator
 
 CURRENCY_AUD = "AUD"
+_LOGGER = logging.getLogger(__name__)
 ZEROHERO_STATUS_OPTIONS = (
     "achieved",
     "missed",
@@ -171,6 +180,103 @@ def _billing_period_completed_days(
     return max(0, ((today or _local_today()) - start).days)
 
 
+def _service_type(service: dict[str, Any]) -> str:
+    """Return a normalized service type."""
+    return str(service.get("serviceType") or "").strip().lower()
+
+
+def _is_gas_service(service: dict[str, Any]) -> bool:
+    """Return whether a service is gas."""
+    return "gas" in _service_type(service)
+
+
+def _service_name_suffix(service: dict[str, Any]) -> str:
+    """Return a readable label that distinguishes services in sensor names."""
+    site_identifier = str(service.get("siteIdentifier") or "").strip()
+    account_service_id = str(service.get("accountServiceId") or "").strip()
+
+    if site_identifier:
+        return site_identifier
+    if account_service_id:
+        return account_service_id
+    return account_service_id or "unknown"
+
+
+def _safe_statistic_id(raw_id: Any, fallback: str) -> str:
+    """Return a recorder-safe statistic ID suffix.
+
+    Home Assistant recorder rejects statistic IDs with unsupported characters.
+    """
+    raw = str(raw_id or fallback).strip().lower()
+    safe = re.sub(r"[^a-z0-9_]+", "_", raw).strip("_")
+    if not safe:
+        safe = re.sub(r"[^a-z0-9_]+", "_", fallback.lower()).strip("_")
+    if not safe:
+        return "service"
+    # Recorder rejects IDs containing double underscores.
+    safe = re.sub(r"_+", "_", safe)
+    if not safe[0].isalpha():
+        safe = f"svc_{safe}"
+    return safe.strip("_") or "service"
+
+
+def _build_gas_statistics(
+    history_rows: list[dict[str, Any]],
+    *,
+    tzinfo: Any,
+) -> list[dict[str, Any]]:
+    """Build serial-aware cumulative gas statistics.
+
+    A replacement meter may restart at a lower index. Keep an independent
+    high-water mark for each serial so the cumulative sum continues without
+    discarding usage from the replacement meter.
+    """
+    rows = sorted(
+        (
+            row
+            for row in history_rows
+            if isinstance(row, dict)
+            and _parse_portal_day(row.get("date")) is not None
+            and isinstance(row.get("read_index"), (int, float))
+        ),
+        key=lambda row: (
+            str(row.get("date") or ""),
+            str(row.get("serial") or ""),
+            float(row.get("read_index") or 0.0),
+        ),
+    )
+    if not rows:
+        return []
+
+    meter_high_water: dict[str, float] = {}
+    cumulative_sum: float | None = None
+    by_day: dict[date, dict[str, Any]] = {}
+
+    for row in rows:
+        parsed_day = _parse_portal_day(row.get("date"))
+        if parsed_day is None:
+            continue
+        reading = float(row["read_index"])
+        meter_key = str(row.get("serial") or "unknown")
+        previous = meter_high_water.get(meter_key)
+
+        if cumulative_sum is None:
+            cumulative_sum = reading
+        elif previous is not None and reading > previous:
+            cumulative_sum += reading - previous
+
+        meter_high_water[meter_key] = (
+            reading if previous is None else max(previous, reading)
+        )
+        by_day[parsed_day] = {
+            "start": datetime.combine(parsed_day, dt_time.min, tzinfo=tzinfo),
+            "state": reading,
+            "sum": cumulative_sum,
+        }
+
+    return [by_day[day] for day in sorted(by_day)]
+
+
 def _zerohero_last_result(
     summary: dict[str, Any],
 ) -> tuple[str, date | None, str | None]:
@@ -308,25 +414,50 @@ async def async_setup_entry(
         entities.append(GloBirdAccountSummarySensor(coordinator, config_entry, account))
 
     for service in data.get("services", []):
-        entities.extend(
-            [
-                GloBirdServiceStatusSensor(coordinator, config_entry, service),
-                GloBirdMeterInfoSensor(coordinator, config_entry, service),
-                GloBirdLatestDataDateSensor(coordinator, config_entry, service),
-                GloBirdLatestDataStatusSensor(coordinator, config_entry, service),
-                GloBirdUsageTotalSensor(coordinator, config_entry, service),
-                GloBirdLatestDayUsageSensor(coordinator, config_entry, service),
-                GloBirdSolarExportTotalSensor(coordinator, config_entry, service),
-                GloBirdLatestDaySolarExportSensor(coordinator, config_entry, service),
-                GloBirdCostTotalSensor(coordinator, config_entry, service),
-                GloBirdLatestDayCostSensor(coordinator, config_entry, service),
-                GloBirdZeroHeroStatusSensor(coordinator, config_entry, service),
-                GloBirdExpectedMonthlyCostSensor(coordinator, config_entry, service),
-                GloBirdBillingPeriodDaysSensor(coordinator, config_entry, service),
-                GloBirdBillingPeriodCostSensor(coordinator, config_entry, service),
-                GloBirdWeatherSummarySensor(coordinator, config_entry, service),
-            ]
-        )
+        service_entities: list[SensorEntity] = [
+            GloBirdServiceStatusSensor(coordinator, config_entry, service),
+            GloBirdMeterInfoSensor(coordinator, config_entry, service),
+        ]
+
+        if _is_gas_service(service):
+            service_entities.extend(
+                [
+                    GloBirdLatestGasReadingSensor(coordinator, config_entry, service),
+                    GloBirdLatestGasReadingDateSensor(
+                        coordinator,
+                        config_entry,
+                        service,
+                    ),
+                ]
+            )
+        else:
+            service_entities.extend(
+                [
+                    GloBirdLatestDataDateSensor(coordinator, config_entry, service),
+                    GloBirdLatestDataStatusSensor(coordinator, config_entry, service),
+                    GloBirdUsageTotalSensor(coordinator, config_entry, service),
+                    GloBirdLatestDayUsageSensor(coordinator, config_entry, service),
+                    GloBirdSolarExportTotalSensor(coordinator, config_entry, service),
+                    GloBirdLatestDaySolarExportSensor(
+                        coordinator,
+                        config_entry,
+                        service,
+                    ),
+                    GloBirdCostTotalSensor(coordinator, config_entry, service),
+                    GloBirdLatestDayCostSensor(coordinator, config_entry, service),
+                    GloBirdZeroHeroStatusSensor(coordinator, config_entry, service),
+                    GloBirdExpectedMonthlyCostSensor(
+                        coordinator,
+                        config_entry,
+                        service,
+                    ),
+                    GloBirdBillingPeriodDaysSensor(coordinator, config_entry, service),
+                    GloBirdBillingPeriodCostSensor(coordinator, config_entry, service),
+                    GloBirdWeatherSummarySensor(coordinator, config_entry, service),
+                ]
+            )
+
+        entities.extend(service_entities)
 
     async_add_entities(entities)
 
@@ -336,7 +467,9 @@ class GloBirdBaseSensor(CoordinatorEntity[GloBirdCoordinator], SensorEntity):
 
     _attr_has_entity_name = True
 
-    def __init__(self, coordinator: GloBirdCoordinator, config_entry: ConfigEntry) -> None:
+    def __init__(
+        self, coordinator: GloBirdCoordinator, config_entry: ConfigEntry
+    ) -> None:
         """Initialize the base sensor."""
         super().__init__(coordinator)
         self._config_entry = config_entry
@@ -441,7 +574,10 @@ class GloBirdServiceBaseSensor(GloBirdBaseSensor):
         """Initialize the sensor."""
         super().__init__(coordinator, config_entry)
         self._service_id = service_id(service)
-        self._attr_name = self.sensor_name
+        if _is_gas_service(service):
+            self._attr_name = f"{self.sensor_name} ({_service_name_suffix(service)})"
+        else:
+            self._attr_name = self.sensor_name
         self._attr_unique_id = (
             f"{config_entry.entry_id}_service_{self._service_id}_{self.sensor_key}"
         )
@@ -593,6 +729,158 @@ class GloBirdLatestDataStatusSensor(GloBirdServiceBaseSensor):
         return attrs
 
 
+class GloBirdLatestGasReadingSensor(GloBirdServiceBaseSensor):
+    """Latest gas meter index reading."""
+
+    sensor_key = "latest_gas_reading"
+    sensor_name = "Latest Gas Reading"
+    icon = "mdi:meter-gas"
+    native_unit_of_measurement = UnitOfVolume.CUBIC_METERS
+    device_class = SensorDeviceClass.GAS
+    state_class = SensorStateClass.TOTAL_INCREASING
+
+    async def async_added_to_hass(self) -> None:
+        """Upload historical gas readings to recorder long-term statistics."""
+        await super().async_added_to_hass()
+        await self._async_upload_historical_statistics()
+
+    def _handle_coordinator_update(self) -> None:
+        """Refresh the entity and import any newly published gas reads."""
+        super()._handle_coordinator_update()
+        self.hass.async_create_task(self._async_upload_historical_statistics())
+
+    async def _async_upload_historical_statistics(self) -> None:
+        """Import all historical gas meter reads as external statistics."""
+        summary = self._service_detail().get("gas_reading_summary") or {}
+        history_rows = summary.get("history")
+        if not isinstance(history_rows, list) or not history_rows:
+            _LOGGER.debug(
+                "GloBird gas statistics import skipped for %s (%s): no gas history rows available",
+                self._service_id,
+                getattr(self, "_attr_unique_id", self._service_id),
+            )
+            return
+
+        try:
+            from homeassistant.components.recorder.statistics import (
+                StatisticData,
+                StatisticMetaData,
+                async_add_external_statistics,
+            )
+        except ImportError:
+            return
+
+        statistics = [
+            StatisticData(**row)
+            for row in _build_gas_statistics(
+                history_rows,
+                tzinfo=dt_util.now().tzinfo or timezone.utc,
+            )
+        ]
+
+        if not statistics:
+            _LOGGER.debug(
+                "GloBird gas statistics import skipped for %s (%s): no valid gas statistics rows after parsing",
+                self._service_id,
+                getattr(self, "_attr_unique_id", self._service_id),
+            )
+            return
+
+        statistic_suffix = _safe_statistic_id(
+            getattr(self, "_attr_unique_id", self._service_id),
+            self._service_id,
+        )
+        statistic_id = f"{DOMAIN}:{statistic_suffix}"
+        metadata = StatisticMetaData(
+            has_mean=False,
+            mean_type=StatisticMeanType.NONE,
+            has_sum=True,
+            name=self._attr_name,
+            source=DOMAIN,
+            statistic_id=statistic_id,
+            unit_class=VolumeConverter.UNIT_CLASS,
+            unit_of_measurement=self.native_unit_of_measurement,
+        )
+        _LOGGER.debug(
+            "GloBird gas statistics prepared for %s (%s): %d rows from %s to %s",
+            self._service_id,
+            statistic_id,
+            len(statistics),
+            statistics[0]["start"].isoformat(),
+            statistics[-1]["start"].isoformat(),
+        )
+        try:
+            add_result = async_add_external_statistics(self.hass, metadata, statistics)
+            if isawaitable(add_result):
+                await add_result
+        except Exception as err:  # noqa: BLE001 - statistics import is best-effort.
+            _LOGGER.warning(
+                "GloBird gas statistics import skipped for %s (%s): %s",
+                self._service_id,
+                statistic_id,
+                err,
+            )
+
+    @property
+    def native_value(self) -> Any:
+        """Return latest gas meter read index."""
+        return (self._service_detail().get("gas_reading_summary") or {}).get(
+            "latest_reading"
+        )
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return latest gas reading metadata and compact history."""
+        attrs = self._service_attrs()
+        summary = self._service_detail().get("gas_reading_summary") or {}
+        attrs.update(
+            {
+                "latest_reading_date": summary.get("latest_reading_date"),
+                "latest_reading_source": summary.get("latest_reading_source"),
+                "latest_reading_serial": summary.get("latest_reading_serial"),
+                "latest_reading_quality_method": summary.get(
+                    "latest_reading_quality_method"
+                ),
+                "history": summary.get("history_recent", []),
+                "history_count": summary.get("history_count", 0),
+                "history_truncated": summary.get("history_truncated", False),
+            }
+        )
+        return attrs
+
+
+class GloBirdLatestGasReadingDateSensor(GloBirdServiceBaseSensor):
+    """Latest gas meter reading date."""
+
+    sensor_key = "latest_gas_reading_date"
+    sensor_name = "Latest Gas Reading Date"
+    icon = "mdi:calendar-clock"
+
+    @property
+    def native_value(self) -> Any:
+        """Return latest gas read date."""
+        return (self._service_detail().get("gas_reading_summary") or {}).get(
+            "latest_reading_date"
+        )
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return latest gas read metadata."""
+        attrs = self._service_attrs()
+        summary = self._service_detail().get("gas_reading_summary") or {}
+        attrs.update(
+            {
+                "latest_reading": summary.get("latest_reading"),
+                "latest_reading_source": summary.get("latest_reading_source"),
+                "latest_reading_serial": summary.get("latest_reading_serial"),
+                "latest_reading_quality_method": summary.get(
+                    "latest_reading_quality_method"
+                ),
+            }
+        )
+        return attrs
+
+
 class GloBirdUsageTotalSensor(GloBirdServiceBaseSensor):
     """Recent usage total sensor."""
 
@@ -686,7 +974,9 @@ class GloBirdLatestDaySolarExportSensor(GloBirdServiceBaseSensor):
     @property
     def native_value(self) -> Any:
         """Return latest day solar export."""
-        return (self._service_detail().get("usage_summary") or {}).get("latest_day_export")
+        return (self._service_detail().get("usage_summary") or {}).get(
+            "latest_day_export"
+        )
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:

@@ -1,9 +1,13 @@
 {
   "domain": "globird_ha",
   "name": "GloBird HA",
-  "codeowners": ["@bolagnaise"],
+  "codeowners": [
+    "@bolagnaise"
+  ],
   "config_flow": true,
-  "dependencies": [],
+  "dependencies": [
+    "recorder"
+  ],
   "documentation": "https://github.com/bolagnaise/globird-ha",
   "integration_type": "service",
   "iot_class": "cloud_polling",

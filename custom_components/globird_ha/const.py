@@ -1,4 +1,5 @@
 """Constants for the GloBird HA integration."""
+
 from __future__ import annotations
 
 from datetime import timedelta
@@ -11,6 +12,7 @@ CONF_PASSWORD = "password"
 BASE_URL = "https://myaccount.globirdenergy.com.au"
 
 DEFAULT_USAGE_DAYS = 31
+DEFAULT_GAS_READING_DAYS = 365
 DEFAULT_INVOICE_LIMIT = 20
 DEFAULT_INVOICE_MONTHS = 12
 
