@@ -83,6 +83,9 @@ class CoordinatorEntity:
     def async_write_ha_state(self) -> None:
         self._write_count += 1
 
+    def _handle_coordinator_update(self) -> None:
+        return None
+
 
 class DataUpdateCoordinator:
     """Minimal stand-in for Home Assistant's DataUpdateCoordinator."""
@@ -391,6 +394,38 @@ def test_statistic_id_uses_recorder_domain_prefix() -> None:
     statistic_id = f"{sensor.DOMAIN}:{suffix}"
     assert statistic_id.startswith(f"{sensor.DOMAIN}:")
     assert "__" not in statistic_id
+
+
+def test_gas_statistics_continue_across_meter_replacement() -> None:
+    """A lower replacement-meter index should continue the cumulative sum."""
+    local_tz = timezone(timedelta(hours=10))
+    statistics = sensor._build_gas_statistics(
+        [
+            {"date": "2026-01-01", "read_index": 100.0, "serial": "old"},
+            {"date": "2026-02-01", "read_index": 110.0, "serial": "old"},
+            {"date": "2026-03-01", "read_index": 5.0, "serial": "new"},
+            {"date": "2026-04-01", "read_index": 12.0, "serial": "new"},
+        ],
+        tzinfo=local_tz,
+    )
+
+    assert [row["state"] for row in statistics] == [100.0, 110.0, 5.0, 12.0]
+    assert [row["sum"] for row in statistics] == [100.0, 110.0, 110.0, 117.0]
+    assert statistics[0]["start"].utcoffset() == timedelta(hours=10)
+
+
+def test_gas_statistics_ignore_downward_correction_without_double_counting() -> None:
+    """A corrected lower read must not be counted again when the index recovers."""
+    statistics = sensor._build_gas_statistics(
+        [
+            {"date": "2026-01-01", "read_index": 100.0, "serial": "meter"},
+            {"date": "2026-02-01", "read_index": 95.0, "serial": "meter"},
+            {"date": "2026-03-01", "read_index": 102.0, "serial": "meter"},
+        ],
+        tzinfo=timezone.utc,
+    )
+
+    assert [row["sum"] for row in statistics] == [100.0, 100.0, 102.0]
 
 
 def test_latest_gas_reading_sensor_exposes_reading_summary() -> None:

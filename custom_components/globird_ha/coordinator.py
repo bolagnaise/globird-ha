@@ -84,12 +84,25 @@ class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._initialized = False
 
     def _set_update_interval_for_data(self, data: dict[str, Any]) -> None:
-        """Slow polling after all services have the latest daily data."""
+        """Slow polling after all electricity services have the latest daily data."""
         now = dt_util.now()
         target_day = now.date() - timedelta(days=1)
-        ready_for_today = all_services_ready_for_day(
-            data.get("service_data"),
-            target_day,
+        service_data = data.get("service_data")
+        electricity_service_data = {
+            sid: detail
+            for sid, detail in (
+                service_data.items() if isinstance(service_data, dict) else ()
+            )
+            if isinstance(detail, dict)
+            and "gas"
+            not in str(
+                (detail.get("service") or {}).get("serviceType") or ""
+            ).lower()
+        }
+        ready_for_today = (
+            all_services_ready_for_day(electricity_service_data, target_day)
+            if electricity_service_data
+            else bool(service_data)
         )
         next_interval = (
             _next_ready_poll_interval(now)
@@ -289,14 +302,23 @@ class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         service_status = status_map.get(sid) if isinstance(status_map, dict) else None
 
-        meter = select_meter_for_service(service, meters_payload)
         service_type = str(service.get("serviceType") or "").lower()
         is_gas_service = "gas" in service_type
         identifier = service.get("siteIdentifier")
+        account_service_id = service.get("accountServiceId")
+        service_meters = await self._fetch_optional(
+            "read_meters",
+            lambda: self.client.get_read_meters(
+                account_service_id=account_service_id
+            ),
+            cache,
+        )
+        if not isinstance(service_meters, dict):
+            service_meters = meters_payload
+        meter = select_meter_for_service(service, service_meters)
         serial_number = meter.get("serialNumber") if meter else None
         meter_read_type = str(meter.get("meterReadType") or "" if meter else "")
-        is_smart = meter_read_type.lower() != "basic"
-        account_service_id = service.get("accountServiceId")
+        is_smart = not is_gas_service and meter_read_type.lower() != "basic"
 
         usage = None
         if identifier and serial_number:
@@ -350,6 +372,7 @@ class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "service": service,
             "status": service_status,
             "meter": meter,
+            "read_meters": service_meters,
             "usage": usage,
             "usage_summary": usage_summary,
             "gas_reading_summary": gas_reading_summary,

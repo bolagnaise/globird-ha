@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import logging
 import re
-from inspect import isawaitable
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from datetime import time as dt_time
+from inspect import isawaitable
 from typing import Any
 
 from homeassistant.components.sensor import (
@@ -218,6 +218,63 @@ def _safe_statistic_id(raw_id: Any, fallback: str) -> str:
     if not safe[0].isalpha():
         safe = f"svc_{safe}"
     return safe.strip("_") or "service"
+
+
+def _build_gas_statistics(
+    history_rows: list[dict[str, Any]],
+    *,
+    tzinfo: Any,
+) -> list[dict[str, Any]]:
+    """Build serial-aware cumulative gas statistics.
+
+    A replacement meter may restart at a lower index. Keep an independent
+    high-water mark for each serial so the cumulative sum continues without
+    discarding usage from the replacement meter.
+    """
+    rows = sorted(
+        (
+            row
+            for row in history_rows
+            if isinstance(row, dict)
+            and _parse_portal_day(row.get("date")) is not None
+            and isinstance(row.get("read_index"), (int, float))
+        ),
+        key=lambda row: (
+            str(row.get("date") or ""),
+            str(row.get("serial") or ""),
+            float(row.get("read_index") or 0.0),
+        ),
+    )
+    if not rows:
+        return []
+
+    meter_high_water: dict[str, float] = {}
+    cumulative_sum: float | None = None
+    by_day: dict[date, dict[str, Any]] = {}
+
+    for row in rows:
+        parsed_day = _parse_portal_day(row.get("date"))
+        if parsed_day is None:
+            continue
+        reading = float(row["read_index"])
+        meter_key = str(row.get("serial") or "unknown")
+        previous = meter_high_water.get(meter_key)
+
+        if cumulative_sum is None:
+            cumulative_sum = reading
+        elif previous is not None and reading > previous:
+            cumulative_sum += reading - previous
+
+        meter_high_water[meter_key] = (
+            reading if previous is None else max(previous, reading)
+        )
+        by_day[parsed_day] = {
+            "start": datetime.combine(parsed_day, dt_time.min, tzinfo=tzinfo),
+            "state": reading,
+            "sum": cumulative_sum,
+        }
+
+    return [by_day[day] for day in sorted(by_day)]
 
 
 def _zerohero_last_result(
@@ -687,12 +744,17 @@ class GloBirdLatestGasReadingSensor(GloBirdServiceBaseSensor):
         await super().async_added_to_hass()
         await self._async_upload_historical_statistics()
 
+    def _handle_coordinator_update(self) -> None:
+        """Refresh the entity and import any newly published gas reads."""
+        super()._handle_coordinator_update()
+        self.hass.async_create_task(self._async_upload_historical_statistics())
+
     async def _async_upload_historical_statistics(self) -> None:
         """Import all historical gas meter reads as external statistics."""
         summary = self._service_detail().get("gas_reading_summary") or {}
         history_rows = summary.get("history")
         if not isinstance(history_rows, list) or not history_rows:
-            _LOGGER.warning(
+            _LOGGER.debug(
                 "GloBird gas statistics import skipped for %s (%s): no gas history rows available",
                 self._service_id,
                 getattr(self, "_attr_unique_id", self._service_id),
@@ -708,52 +770,16 @@ class GloBirdLatestGasReadingSensor(GloBirdServiceBaseSensor):
         except ImportError:
             return
 
-        by_day: dict[str, float] = {}
-        for row in history_rows:
-            if not isinstance(row, dict):
-                continue
-            day = str(row.get("date") or "").strip()
-            if not day:
-                continue
-            raw_value = row.get("read_index")
-            if raw_value is None:
-                continue
-            try:
-                value = float(raw_value)
-            except (TypeError, ValueError):
-                continue
-            by_day[day] = max(value, by_day.get(day, value))
-
-        if not by_day:
-            return
-
-        running_max: float | None = None
-        statistics: list[StatisticData] = []
-        for day in sorted(by_day):
-            parsed_day = _parse_portal_day(day)
-            if parsed_day is None:
-                continue
-            reading = by_day[day]
-            if running_max is None:
-                running_max = reading
-            else:
-                # Statistics for total_increasing must not go backwards.
-                running_max = max(running_max, reading)
-
-            statistics.append(
-                StatisticData(
-                    start=datetime.combine(
-                        parsed_day,
-                        dt_time.min,
-                        tzinfo=timezone.utc,
-                    ),
-                    state=running_max,
-                    sum=running_max,
-                )
+        statistics = [
+            StatisticData(**row)
+            for row in _build_gas_statistics(
+                history_rows,
+                tzinfo=dt_util.now().tzinfo or timezone.utc,
             )
+        ]
 
         if not statistics:
-            _LOGGER.warning(
+            _LOGGER.debug(
                 "GloBird gas statistics import skipped for %s (%s): no valid gas statistics rows after parsing",
                 self._service_id,
                 getattr(self, "_attr_unique_id", self._service_id),
@@ -775,7 +801,7 @@ class GloBirdLatestGasReadingSensor(GloBirdServiceBaseSensor):
             unit_class=VolumeConverter.UNIT_CLASS,
             unit_of_measurement=self.native_unit_of_measurement,
         )
-        _LOGGER.warning(
+        _LOGGER.debug(
             "GloBird gas statistics prepared for %s (%s): %d rows from %s to %s",
             self._service_id,
             statistic_id,

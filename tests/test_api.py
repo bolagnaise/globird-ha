@@ -271,6 +271,11 @@ def test_extract_accounts_and_services_includes_active_gas_services() -> None:
                             "serviceType": "Gas",
                             "status": "Closed",
                         },
+                        {
+                            "accountServiceId": 13,
+                            "serviceType": "Internet",
+                            "status": "Switched",
+                        },
                     ],
                 }
             ]
@@ -280,6 +285,25 @@ def test_extract_accounts_and_services_includes_active_gas_services() -> None:
     _, services = extract_accounts_and_services(payload)
 
     assert [service["accountServiceId"] for service in services] == [10, 11]
+
+
+def test_select_meter_rejects_another_services_identified_meter() -> None:
+    """A scoped response for another service must not be used as a fallback."""
+    selected = select_meter_for_service(
+        {"siteIdentifier": "MIRN-GAS"},
+        {
+            "data": [
+                {
+                    "siteIdentifier": "NMI-POWER",
+                    "meterReadType": "SMART",
+                    "serialNumber": "power-meter",
+                    "serialStatus": "Active",
+                }
+            ]
+        },
+    )
+
+    assert selected is None
 
 
 def test_build_gas_reading_summary_tracks_latest_reading_and_history() -> None:
@@ -804,6 +828,7 @@ def load_tests(
         test_get_usage_uses_basic_meter_endpoint_for_non_smart_meter,
         test_extract_accounts_services_and_summaries,
         test_extract_accounts_and_services_includes_active_gas_services,
+        test_select_meter_rejects_another_services_identified_meter,
         test_build_gas_reading_summary_tracks_latest_reading_and_history,
         test_cost_summary_net_daily_is_sum_not_last_row,
         test_cost_summary_ignores_supply_only_partial_latest_day,

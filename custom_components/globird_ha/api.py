@@ -225,6 +225,12 @@ def extract_accounts_and_services(
             if svc_status == "closed":
                 continue
 
+            service_type = str(service.get("serviceType") or "").lower()
+            if service_type and not any(
+                marker in service_type for marker in ("power", "electric", "gas")
+            ):
+                continue
+
             enriched = dict(service)
             enriched["accountId"] = account_id
             enriched["accountNumber"] = account.get("accountNumber")
@@ -330,6 +336,9 @@ def select_meter_for_service(
         ]
         if matched:
             meters = matched
+        elif any(m.get("siteIdentifier") or m.get("nmi") for m in meters):
+            # Do not attach another service's identified meter to this service.
+            return None
 
     return max(
         enumerate(meters),
