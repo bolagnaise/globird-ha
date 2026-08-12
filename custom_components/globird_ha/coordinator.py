@@ -26,10 +26,11 @@ from .api import (
     service_id,
 )
 from .const import (
-    ACCOUNT_READY_UPDATE_OFFSET,
     ACCOUNT_UPDATE_INTERVAL,
+    CONF_DAILY_POLL_START_TIME,
     CONF_EMAIL,
     CONF_PASSWORD,
+    DEFAULT_DAILY_POLL_START_TIME,
     DEFAULT_USAGE_DAYS,
     DEFAULT_GAS_READING_DAYS,
     DOMAIN,
@@ -47,12 +48,30 @@ def _is_expected_optional_fetch_failure(key: str, err: Exception) -> bool:
     return False
 
 
-def _next_ready_poll_interval(now: datetime) -> timedelta:
+def _parse_daily_poll_start_time(value: Any) -> dt_time:
+    """Return a configured local daily polling start time."""
+    raw = str(value or DEFAULT_DAILY_POLL_START_TIME).strip()
+    try:
+        hour_raw, minute_raw = raw.split(":", 1)
+        hour = int(hour_raw)
+        minute = int(minute_raw)
+        if 0 <= hour <= 23 and 0 <= minute <= 59:
+            return dt_time(hour=hour, minute=minute)
+    except (TypeError, ValueError):
+        pass
+    return dt_time(hour=0, minute=5)
+
+
+def _next_ready_poll_interval(
+    now: datetime,
+    poll_start_time: dt_time | None = None,
+) -> timedelta:
     """Return the interval until the first readiness check for the next day."""
     next_day = now.date() + timedelta(days=1)
-    next_poll = (
-        datetime.combine(next_day, dt_time.min, tzinfo=now.tzinfo)
-        + ACCOUNT_READY_UPDATE_OFFSET
+    next_poll = datetime.combine(
+        next_day,
+        poll_start_time or _parse_daily_poll_start_time(None),
+        tzinfo=now.tzinfo,
     )
     return next_poll - now
 
@@ -83,6 +102,17 @@ class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._cache: dict[str, Any] | None = None
         self._initialized = False
 
+    @property
+    def _daily_poll_start_time(self) -> dt_time:
+        """Return the configured local time for the next day's readiness polling."""
+        options = getattr(self.entry, "options", {})
+        configured = (
+            options.get(CONF_DAILY_POLL_START_TIME)
+            if isinstance(options, dict)
+            else None
+        )
+        return _parse_daily_poll_start_time(configured)
+
     def _set_update_interval_for_data(self, data: dict[str, Any]) -> None:
         """Slow polling after all electricity services have the latest daily data."""
         now = dt_util.now()
@@ -105,7 +135,7 @@ class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             else bool(service_data)
         )
         next_interval = (
-            _next_ready_poll_interval(now)
+            _next_ready_poll_interval(now, self._daily_poll_start_time)
             if ready_for_today
             else ACCOUNT_UPDATE_INTERVAL
         )

@@ -82,7 +82,7 @@ sys.modules.setdefault("homeassistant.util.dt", dt)
 coordinator = importlib.import_module("custom_components.globird_ha.coordinator")
 
 
-def test_next_ready_poll_interval_targets_just_after_next_midnight() -> None:
+def test_next_ready_poll_interval_targets_configured_daily_start() -> None:
     """Ready data should schedule the next automatic check for the next day."""
     now = datetime(2026, 6, 29, 10, 30, tzinfo=timezone.utc)
 
@@ -90,6 +90,21 @@ def test_next_ready_poll_interval_targets_just_after_next_midnight() -> None:
         hours=13,
         minutes=35,
     )
+    assert coordinator._next_ready_poll_interval(
+        now,
+        coordinator._parse_daily_poll_start_time("03:00"),
+    ) == timedelta(hours=16, minutes=30)
+
+
+def test_invalid_daily_poll_start_time_falls_back_to_default() -> None:
+    """Invalid stored options should keep the midnight-plus-default behavior."""
+    now = datetime(2026, 6, 29, 10, 30, tzinfo=timezone.utc)
+
+    assert coordinator._parse_daily_poll_start_time("25:99").isoformat() == "00:05:00"
+    assert coordinator._next_ready_poll_interval(
+        now,
+        coordinator._parse_daily_poll_start_time("25:99"),
+    ) == timedelta(hours=13, minutes=35)
 
 
 def test_update_interval_slows_only_when_daily_data_is_ready(monkeypatch: Any) -> None:
@@ -99,6 +114,7 @@ def test_update_interval_slows_only_when_daily_data_is_ready(monkeypatch: Any) -
 
     instance = object.__new__(coordinator.GloBirdCoordinator)
     instance.update_interval = coordinator.ACCOUNT_UPDATE_INTERVAL
+    instance.entry = types.SimpleNamespace(options={})
 
     instance._set_update_interval_for_data(
         {
@@ -138,6 +154,9 @@ def test_update_interval_ignores_gas_readiness(monkeypatch: Any) -> None:
 
     instance = object.__new__(coordinator.GloBirdCoordinator)
     instance.update_interval = coordinator.ACCOUNT_UPDATE_INTERVAL
+    instance.entry = types.SimpleNamespace(
+        options={coordinator.CONF_DAILY_POLL_START_TIME: "03:00"}
+    )
     instance._set_update_interval_for_data(
         {
             "service_data": {
@@ -159,7 +178,7 @@ def test_update_interval_ignores_gas_readiness(monkeypatch: Any) -> None:
         }
     )
 
-    assert instance.update_interval == timedelta(hours=13, minutes=35)
+    assert instance.update_interval == timedelta(hours=16, minutes=30)
 
     instance.update_interval = coordinator.ACCOUNT_UPDATE_INTERVAL
     instance._set_update_interval_for_data(
@@ -176,7 +195,7 @@ def test_update_interval_ignores_gas_readiness(monkeypatch: Any) -> None:
         }
     )
 
-    assert instance.update_interval == timedelta(hours=13, minutes=35)
+    assert instance.update_interval == timedelta(hours=16, minutes=30)
 
 
 def test_gas_service_fetches_its_own_meter_and_forces_basic_endpoint() -> None:

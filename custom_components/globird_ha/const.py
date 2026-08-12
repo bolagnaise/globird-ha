@@ -8,6 +8,8 @@ DOMAIN = "globird_ha"
 
 CONF_EMAIL = "email"
 CONF_PASSWORD = "password"
+CONF_DAILY_POLL_START_TIME = "daily_poll_start_time"
+DEFAULT_DAILY_POLL_START_TIME = "00:05"
 
 BASE_URL = "https://myaccount.globirdenergy.com.au"
 
@@ -17,7 +19,6 @@ DEFAULT_INVOICE_LIMIT = 20
 DEFAULT_INVOICE_MONTHS = 12
 
 ACCOUNT_UPDATE_INTERVAL = timedelta(minutes=30)
-ACCOUNT_READY_UPDATE_OFFSET = timedelta(minutes=5)
 
 STORAGE_VERSION = 1
 

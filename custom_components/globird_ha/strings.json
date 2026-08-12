@@ -20,6 +20,17 @@
       "already_configured": "This GloBird account is already configured"
     }
   },
+  "options": {
+    "step": {
+      "init": {
+        "title": "GloBird HA options",
+        "description": "Set when automatic daily readiness polling resumes after the previous day is ready.",
+        "data": {
+          "daily_poll_start_time": "Daily polling start time"
+        }
+      }
+    }
+  },
   "entity": {
     "sensor": {
       "balance": {
