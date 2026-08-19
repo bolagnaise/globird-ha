@@ -380,21 +380,15 @@ def _build_register_summary(
                 "usage": 0.0,
                 "meterStatus": row.get("meterStatus"),
                 "minQualityMethod": row.get("minQualityMethod"),
-                "intervals": None,
+                "register_arrays": {},
             }
         by_date[d]["usage"] += usage
-        # Element-wise sum of usageArrays across all time-of-use periods for the day
+        # Each time-of-use row repeats the register's full-day usageArray,
+        # so keep one array per register rather than summing rows together.
         arr = row.get("usageArray")
         if isinstance(arr, list) and arr:
-            existing = by_date[d]["intervals"]
-            if existing is None:
-                by_date[d]["intervals"] = list(arr)
-            else:
-                for i, v in enumerate(arr):
-                    if i < len(existing):
-                        existing[i] = (_as_float(existing[i]) or 0.0) + (
-                            _as_float(v) or 0.0
-                        )
+            register = (str(row.get("serial") or ""), str(row.get("suffix") or ""))
+            by_date[d]["register_arrays"].setdefault(register, arr)
 
     total = sum(v["usage"] for v in by_date.values())
     latest_date = max(by_date) if by_date else None
@@ -410,9 +404,18 @@ def _build_register_summary(
         for v in sorted(by_date.values(), key=lambda x: x["readDate"])
     ]
 
+    # Element-wise sum across distinct registers (e.g. E1 + controlled load E2).
     latest_intervals: list[Any] = []
-    if latest_entry and isinstance(latest_entry["intervals"], list):
-        latest_intervals = [_round(_as_float(v), 5) for v in latest_entry["intervals"]]
+    if latest_entry:
+        summed: list[float] = []
+        for arr in latest_entry["register_arrays"].values():
+            if not summed:
+                summed = [_as_float(v) or 0.0 for v in arr]
+            else:
+                for i, v in enumerate(arr):
+                    if i < len(summed):
+                        summed[i] += _as_float(v) or 0.0
+        latest_intervals = [_round(v, 5) for v in summed]
 
     return {
         "days": len(by_date),
