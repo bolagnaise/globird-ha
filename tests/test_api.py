@@ -593,6 +593,51 @@ def test_usage_summary_tracks_all_registers_and_b_exports() -> None:
     assert usage["registers"][3]["direction"] == "export"
 
 
+def test_usage_summary_does_not_double_count_time_of_use_intervals() -> None:
+    """Time-of-use rows repeat the register's full-day usageArray; count it once per register."""
+    full_day_e1 = [1.0, 2.0, 1.5, 0.5]
+    payload = {
+        "data": [
+            {
+                "readDate": "2026-04-24",
+                "usage": 3.0,
+                "suffix": "E1",
+                "serial": "M1",
+                "chargeType": "Peak",
+                "chargeCategoryCode": "USAGE",
+                "usageArray": full_day_e1,
+            },
+            {
+                "readDate": "2026-04-24",
+                "usage": 2.0,
+                "suffix": "E1",
+                "serial": "M1",
+                "chargeType": "Off Peak",
+                "chargeCategoryCode": "USAGE",
+                "usageArray": full_day_e1,
+            },
+            {
+                "readDate": "2026-04-24",
+                "usage": 1.0,
+                "suffix": "E2",
+                "serial": "M1",
+                "chargeType": "Controlled Load",
+                "chargeCategoryCode": "CONTROL",
+                "usageArray": [0.25, 0.25, 0.25, 0.25],
+            },
+        ],
+        "message": None,
+        "success": True,
+    }
+
+    usage = build_usage_summary(payload)
+
+    assert usage["latest_day_usage"] == 6.0
+    assert usage["latest_intervals"] == [1.25, 2.25, 1.75, 0.75]
+    # Intervals must add up to the day's usage, not a multiple of it.
+    assert sum(usage["latest_intervals"]) == usage["latest_day_usage"]
+
+
 def test_cost_summary_exposes_new_category_totals() -> None:
     """Cost summaries preserve newer GloBird categories separately."""
     payload = {
