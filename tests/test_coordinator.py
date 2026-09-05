@@ -8,6 +8,7 @@ import sys
 import types
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 COMPONENT_PATH = Path(__file__).parents[1] / "custom_components"
@@ -105,6 +106,39 @@ def test_invalid_daily_poll_start_time_falls_back_to_default() -> None:
         now,
         coordinator._parse_daily_poll_start_time("25:99"),
     ) == timedelta(hours=13, minutes=35)
+
+
+def test_daily_poll_start_time_reads_real_ha_mappingproxytype_options() -> None:
+    """Real Home Assistant ConfigEntry.options is a MappingProxyType, not a dict.
+
+    isinstance(options, dict) is False for MappingProxyType, so a check using
+    dict instead of collections.abc.Mapping would silently ignore every
+    configured option on real Home Assistant while appearing to work in
+    tests that use a plain dict.
+    """
+    instance = object.__new__(coordinator.GloBirdCoordinator)
+    instance.entry = types.SimpleNamespace(
+        options=MappingProxyType({coordinator.CONF_DAILY_POLL_START_TIME: "03:00"})
+    )
+
+    assert instance._daily_poll_start_time.isoformat() == "03:00:00"
+
+
+def test_parsed_tou_rate_schedule_reads_real_ha_mappingproxytype_options() -> None:
+    """The TOU rate schedule option must also survive a MappingProxyType options object."""
+    instance = object.__new__(coordinator.GloBirdCoordinator)
+    schedule_json = (
+        '{"periods": [{"name": "Peak", "rate": 0.4, "windows": [["15:00", "21:00"]]}]}'
+    )
+    instance.entry = types.SimpleNamespace(
+        options=MappingProxyType({coordinator.CONF_TOU_RATE_SCHEDULE: schedule_json})
+    )
+
+    schedule, error = instance._parsed_tou_rate_schedule()
+
+    assert error is None
+    assert schedule is not None
+    assert schedule["periods"][0]["name"] == "Peak"
 
 
 def test_update_interval_slows_only_when_daily_data_is_ready(monkeypatch: Any) -> None:
@@ -247,6 +281,9 @@ def test_gas_service_fetches_its_own_meter_and_forces_basic_endpoint() -> None:
                     }
                 ]
             },
+            None,
+            None,
+            None,
             None,
             {},
         )

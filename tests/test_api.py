@@ -593,6 +593,109 @@ def test_usage_summary_tracks_all_registers_and_b_exports() -> None:
     assert usage["registers"][3]["direction"] == "export"
 
 
+def test_usage_summary_retains_intervals_for_every_day() -> None:
+    """Half-hourly intervals are kept for all fetched days, not just the latest."""
+    payload = {
+        "data": [
+            {
+                "readDate": "2026-04-23",
+                "usage": 3.0,
+                "suffix": "E1",
+                "chargeType": "Peak",
+                "chargeCategoryCode": "USAGE",
+                "usageArray": [1.0, 2.0],
+            },
+            {
+                "readDate": "2026-04-24",
+                "usage": 5.0,
+                "suffix": "E1",
+                "chargeType": "Peak",
+                "chargeCategoryCode": "USAGE",
+                "usageArray": [2.0, 3.0],
+            },
+        ],
+        "message": None,
+        "success": True,
+    }
+
+    usage = build_usage_summary(payload)
+
+    assert usage["intervals_by_day"] == [
+        {"readDate": "2026-04-23", "intervals": [1.0, 2.0]},
+        {"readDate": "2026-04-24", "intervals": [2.0, 3.0]},
+    ]
+    # The latest-day-only attribute keeps working alongside the new full history.
+    assert usage["latest_intervals"] == [2.0, 3.0]
+
+
+def test_usage_attributes_expose_recent_intervals_by_day_when_requested() -> None:
+    """intervals_by_day is recorder-safe (truncated) and opt-in via a flag."""
+    payload = {
+        "data": [
+            {
+                "readDate": (date(2026, 4, 1) + timedelta(days=offset)).isoformat(),
+                "usage": 1.0,
+                "suffix": "E1",
+                "chargeType": "Peak",
+                "chargeCategoryCode": "USAGE",
+                "usageArray": [0.1] * 48,
+            }
+            for offset in range(10)
+        ],
+    }
+    summary = build_usage_summary(payload)
+
+    without_intervals = usage_attributes(summary, direction="import")
+    assert "intervals_by_day" not in without_intervals
+
+    with_intervals = usage_attributes(
+        summary, direction="import", include_intervals_by_day=True
+    )
+    assert with_intervals["intervals_by_day_count"] == 10
+    assert with_intervals["intervals_by_day_truncated"] is True
+    assert len(with_intervals["intervals_by_day"]) == 7
+    assert len(json.dumps(with_intervals)) < 16_384
+
+
+def test_usage_intervals_are_not_double_counted_across_tou_periods() -> None:
+    """The portal attaches the same full-day array to every TOU row for a
+    suffix; only the first occurrence per (date, suffix) should be counted,
+    or interval sums silently double for time-of-use tariffs."""
+    payload = {
+        "data": [
+            {
+                "readDate": "2026-09-01",
+                "usage": 2.482,
+                "suffix": "E1",
+                "chargeType": "Offpeak Usage",
+                "chargeCategoryCode": "USAGE",
+                "usageArray": [0.02, 0.024, 0.007],
+            },
+            {
+                "readDate": "2026-09-01",
+                "usage": 2.183,
+                "suffix": "E1",
+                "chargeType": "Peak Usage",
+                "chargeCategoryCode": "USAGE",
+                # Portal duplicates the same full-day array on every TOU row.
+                "usageArray": [0.02, 0.024, 0.007],
+            },
+        ],
+        "message": None,
+        "success": True,
+    }
+
+    usage = build_usage_summary(payload)
+
+    # Scalar usage totals correctly sum each TOU period's own portion.
+    assert usage["latest_day_usage"] == 4.665
+    # But the interval array must only be counted once, not once per TOU row.
+    assert usage["latest_intervals"] == [0.02, 0.024, 0.007]
+    assert usage["intervals_by_day"] == [
+        {"readDate": "2026-09-01", "intervals": [0.02, 0.024, 0.007]}
+    ]
+
+
 def test_cost_summary_exposes_new_category_totals() -> None:
     """Cost summaries preserve newer GloBird categories separately."""
     payload = {
@@ -638,6 +741,295 @@ def test_cost_summary_exposes_new_category_totals() -> None:
         {"chargeCategory": "USAGE", "amount": 1.2, "quantity": 3.0},
         {"chargeCategory": "ZEROHERO Credit", "amount": -0.3, "quantity": 0.0},
     ]
+
+
+def test_cost_summary_breaks_down_by_charge_type() -> None:
+    """Time-of-use charge types (Peak/Offpeak) are totalled separately when present."""
+    payload = {
+        "data": [
+            {
+                "chargeCategory": "USAGE",
+                "chargeType": "Peak Usage",
+                "date": "2026/09/01",
+                "amount": 2.18,
+                "quantity": 2.183,
+            },
+            {
+                "chargeCategory": "USAGE",
+                "chargeType": "Offpeak Usage",
+                "date": "2026/09/01",
+                "amount": 1.24,
+                "quantity": 2.482,
+            },
+            {
+                "chargeCategory": "SUPPLY",
+                "chargeType": None,
+                "date": "2026/09/01",
+                "amount": 1.12,
+                "quantity": 0.0,
+            },
+        ],
+        "message": None,
+        "success": True,
+    }
+
+    cost = build_cost_summary(payload)
+
+    assert cost["charge_type_totals"] == [
+        {"chargeType": "Offpeak Usage", "amount": 1.24, "quantity": 2.482},
+        {"chargeType": "Peak Usage", "amount": 2.18, "quantity": 2.183},
+    ]
+    assert cost_attributes(cost)["charge_type_totals"] == cost["charge_type_totals"]
+
+
+def test_cost_summary_charge_type_totals_empty_when_type_missing() -> None:
+    """Flat-rate plans with no chargeType on cost rows degrade to an empty list."""
+    payload = {
+        "data": [
+            {
+                "chargeCategory": "USAGE",
+                "chargeType": None,
+                "date": "2026/09/01",
+                "amount": 3.42,
+                "quantity": 4.665,
+            },
+        ],
+        "message": None,
+        "success": True,
+    }
+
+    cost = build_cost_summary(payload)
+
+    assert cost["charge_type_totals"] == []
+
+
+def test_parse_tou_rate_schedule_returns_none_when_blank() -> None:
+    """An unset/blank schedule means the calculated cost feature is disabled."""
+    assert api.parse_tou_rate_schedule(None) is None
+    assert api.parse_tou_rate_schedule("") is None
+    assert api.parse_tou_rate_schedule("   ") is None
+
+
+def test_parse_tou_rate_schedule_parses_windows_and_supply_charge() -> None:
+    """A valid schedule normalizes clock strings into minutes since midnight."""
+    schedule = api.parse_tou_rate_schedule(
+        json.dumps(
+            {
+                "supply_charge": 1.12,
+                "periods": [
+                    {
+                        "name": "Offpeak Usage",
+                        "rate": 0.28,
+                        "windows": [["00:00", "15:00"], ["21:00", "24:00"]],
+                    },
+                    {"name": "Peak Usage", "rate": 0.45, "windows": [["15:00", "21:00"]]},
+                ],
+            }
+        )
+    )
+
+    assert schedule["supply_charge"] == 1.12
+    assert schedule["periods"][0] == {
+        "name": "Offpeak Usage",
+        "rate": 0.28,
+        "windows": [(0, 900), (1260, 1440)],
+    }
+    assert schedule["periods"][1]["windows"] == [(900, 1260)]
+
+
+def test_parse_tou_rate_schedule_rejects_malformed_input() -> None:
+    """Malformed schedules raise ValueError so callers can surface a config error."""
+    for bad in (
+        "not json",
+        "[]",
+        json.dumps({"periods": []}),
+        json.dumps({"periods": [{"name": "Peak", "rate": 0.4}]}),
+        json.dumps(
+            {"periods": [{"name": "Peak", "rate": 0.4, "windows": [["21:00", "15:00"]]}]}
+        ),
+    ):
+        with unittest.TestCase().assertRaises(ValueError):
+            api.parse_tou_rate_schedule(bad)
+
+
+def test_calculate_tou_cost_splits_usage_by_configured_windows() -> None:
+    """Interval usage is bucketed into whichever configured window it falls in."""
+    schedule = api.parse_tou_rate_schedule(
+        json.dumps(
+            {
+                "supply_charge": 1.0,
+                "periods": [
+                    {"name": "Offpeak", "rate": 0.20, "windows": [["00:00", "12:00"]]},
+                    {"name": "Peak", "rate": 0.50, "windows": [["12:00", "24:00"]]},
+                ],
+            }
+        )
+    )
+    # 4 intervals/day => 6 hours each: [0-6h, 6-12h, 12-18h, 18-24h)
+    intervals_by_day = [
+        {"readDate": "2026-09-01", "intervals": [1.0, 1.0, 2.0, 2.0]},
+    ]
+
+    result = api.calculate_tou_cost(intervals_by_day, schedule)
+
+    assert result["days"] == 1
+    assert result["latest_day"] == "2026-09-01"
+    day = result["daily"][0]
+    # Offpeak: 1.0 + 1.0 = 2.0 kWh * 0.20 = 0.40; Peak: 2.0+2.0=4.0 kWh * 0.50 = 2.00
+    assert day["usage_cost"] == 2.40
+    assert day["total_cost"] == 3.40  # + 1.0 supply charge
+    assert day["unassigned_kwh"] == 0.0
+    periods_by_name = {p["name"]: p for p in day["periods"]}
+    assert periods_by_name["Offpeak"] == {"name": "Offpeak", "kwh": 2.0, "cost": 0.4, "rate": 0.20}
+    assert periods_by_name["Peak"] == {"name": "Peak", "kwh": 4.0, "cost": 2.0, "rate": 0.50}
+    assert result["total_cost"] == 3.40
+
+
+def test_calculate_tou_cost_tracks_unassigned_usage_outside_configured_windows() -> None:
+    """Usage outside any configured window is tracked, not silently dropped."""
+    schedule = api.parse_tou_rate_schedule(
+        json.dumps(
+            {
+                "periods": [
+                    {"name": "Evening", "rate": 0.40, "windows": [["18:00", "24:00"]]},
+                ],
+            }
+        )
+    )
+    intervals_by_day = [{"readDate": "2026-09-01", "intervals": [1.0, 1.0]}]
+
+    result = api.calculate_tou_cost(intervals_by_day, schedule)
+
+    day = result["daily"][0]
+    assert day["unassigned_kwh"] == 2.0
+    assert day["usage_cost"] == 0.0
+
+
+def test_calculate_tou_cost_returns_empty_without_a_schedule() -> None:
+    """No schedule configured means the calculated-cost feature stays disabled."""
+    result = api.calculate_tou_cost(
+        [{"readDate": "2026-09-01", "intervals": [1.0]}], None
+    )
+    assert result == {
+        "days": 0,
+        "daily": [],
+        "latest_day": None,
+        "latest_day_cost": None,
+        "total_cost": None,
+    }
+
+
+def test_parse_gas_rate_schedule_returns_none_when_blank() -> None:
+    """An unset/blank gas schedule means the calculated gas cost feature is disabled."""
+    assert api.parse_gas_rate_schedule(None) is None
+    assert api.parse_gas_rate_schedule("") is None
+
+
+def test_parse_gas_rate_schedule_requires_positive_conversion_factor() -> None:
+    """A missing or non-positive MJ conversion factor is rejected."""
+    for bad_conversion in (json.dumps({"seasons": [{"months": [1], "tiers": [{"rate": 0.1}]}]}),):
+        with unittest.TestCase().assertRaises(ValueError):
+            api.parse_gas_rate_schedule(bad_conversion)
+
+
+def test_calculate_gas_cost_applies_seasonal_tiered_rates_to_average_daily_usage() -> None:
+    """Real-world-shaped GLOSAVE gas rates applied over a 30-day read period."""
+    schedule = api.parse_gas_rate_schedule(
+        json.dumps(
+            {
+                "daily_charge": 0.58685,
+                "conversion_mj_per_unit": 38.6,
+                "seasons": [
+                    {
+                        "name": "Summer",
+                        "months": [10, 11, 12, 1, 2, 3],
+                        "tiers": [
+                            {"limit_mj_per_day": 20.70, "rate": 0.03735},
+                            {"limit_mj_per_day": None, "rate": 0.02934},
+                        ],
+                    },
+                    {
+                        "name": "Winter",
+                        "months": [4, 5, 6, 7, 8, 9],
+                        "tiers": [
+                            {"limit_mj_per_day": 20.70, "rate": 0.03735},
+                            {"limit_mj_per_day": None, "rate": 0.02934},
+                        ],
+                    },
+                ],
+            }
+        )
+    )
+    history = [
+        {"date": "2026-08-01", "read_index": 100.0, "serial": "A"},
+        {"date": "2026-08-31", "read_index": 130.0, "serial": "A"},
+    ]
+
+    result = api.calculate_gas_cost(history, schedule)
+
+    assert result["periods"] == [
+        {
+            "start": "2026-08-01",
+            "end": "2026-08-31",
+            "days": 30,
+            "mj_used": 1158.0,
+            "avg_daily_mj": 38.6,
+            "season": "Winter",
+            "usage_cost": 38.95,
+            "daily_charge_cost": 17.61,
+            "total_cost": 56.56,
+        }
+    ]
+    assert result["latest_period_cost"] == 56.56
+    assert result["total_cost"] == 56.56
+
+
+def test_calculate_gas_cost_skips_meter_replacement_reset() -> None:
+    """A lower read on a new serial (meter replacement) is not billed as negative usage."""
+    schedule = api.parse_gas_rate_schedule(
+        json.dumps(
+            {
+                "conversion_mj_per_unit": 38.6,
+                "seasons": [
+                    {"months": list(range(1, 13)), "tiers": [{"rate": 0.03}]},
+                ],
+            }
+        )
+    )
+    history = [
+        {"date": "2026-08-01", "read_index": 500.0, "serial": "old"},
+        {"date": "2026-08-31", "read_index": 5.0, "serial": "new"},
+        {"date": "2026-09-30", "read_index": 20.0, "serial": "new"},
+    ]
+
+    result = api.calculate_gas_cost(history, schedule)
+
+    # Only the new-meter period (5.0 -> 20.0) should be billed.
+    assert len(result["periods"]) == 1
+    assert result["periods"][0]["mj_used"] == 579.0
+
+
+def test_calculate_gas_cost_returns_empty_without_a_schedule() -> None:
+    """No gas schedule configured means the calculated-cost feature stays disabled."""
+    result = api.calculate_gas_cost(
+        [
+            {"date": "2026-08-01", "read_index": 1.0, "serial": "a"},
+            {"date": "2026-08-31", "read_index": 2.0, "serial": "a"},
+        ],
+        None,
+    )
+    assert result == {"periods": [], "latest_period_cost": None, "total_cost": None}
+
+
+def test_meter_type_description_looks_up_by_serial() -> None:
+    """Meter type descriptions are looked up by serial number, and missing serials are safe."""
+    payload = {"data": {"700594829": "Smart", "080625": "Manually read interval"}}
+
+    assert api.meter_type_description(payload, "700594829") == "Smart"
+    assert api.meter_type_description(payload, "080625") == "Manually read interval"
+    assert api.meter_type_description(payload, "unknown-serial") is None
+    assert api.meter_type_description(payload, None) is None
+    assert api.meter_type_description(None, "700594829") is None
 
 
 def test_cost_summary_exposes_daily_net_totals() -> None:
@@ -833,6 +1225,23 @@ def load_tests(
         test_cost_summary_net_daily_is_sum_not_last_row,
         test_cost_summary_ignores_supply_only_partial_latest_day,
         test_usage_summary_tracks_all_registers_and_b_exports,
+        test_usage_summary_retains_intervals_for_every_day,
+        test_usage_attributes_expose_recent_intervals_by_day_when_requested,
+        test_usage_intervals_are_not_double_counted_across_tou_periods,
+        test_cost_summary_breaks_down_by_charge_type,
+        test_cost_summary_charge_type_totals_empty_when_type_missing,
+        test_meter_type_description_looks_up_by_serial,
+        test_parse_gas_rate_schedule_returns_none_when_blank,
+        test_parse_gas_rate_schedule_requires_positive_conversion_factor,
+        test_calculate_gas_cost_applies_seasonal_tiered_rates_to_average_daily_usage,
+        test_calculate_gas_cost_skips_meter_replacement_reset,
+        test_calculate_gas_cost_returns_empty_without_a_schedule,
+        test_parse_tou_rate_schedule_returns_none_when_blank,
+        test_parse_tou_rate_schedule_parses_windows_and_supply_charge,
+        test_parse_tou_rate_schedule_rejects_malformed_input,
+        test_calculate_tou_cost_splits_usage_by_configured_windows,
+        test_calculate_tou_cost_tracks_unassigned_usage_outside_configured_windows,
+        test_calculate_tou_cost_returns_empty_without_a_schedule,
         test_cost_summary_exposes_new_category_totals,
         test_cost_summary_projects_current_month_cost,
         test_sensor_attributes_are_recorder_safe_summaries,

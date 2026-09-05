@@ -10,6 +10,8 @@ CONF_EMAIL = "email"
 CONF_PASSWORD = "password"
 CONF_DAILY_POLL_START_TIME = "daily_poll_start_time"
 DEFAULT_DAILY_POLL_START_TIME = "00:05"
+CONF_TOU_RATE_SCHEDULE = "tou_rate_schedule"
+CONF_GAS_RATE_SCHEDULE = "gas_rate_schedule"
 
 BASE_URL = "https://myaccount.globirdenergy.com.au"
 
