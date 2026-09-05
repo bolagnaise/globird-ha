@@ -152,6 +152,7 @@ def usage_attributes(
     *,
     direction: str,
     include_latest_intervals: bool = False,
+    include_intervals_by_day: bool = False,
 ) -> dict[str, Any]:
     """Return recorder-safe usage attributes for import or export sensors."""
     daily_key = "export_daily" if direction == "export" else "daily"
@@ -173,6 +174,16 @@ def usage_attributes(
     }
     if include_latest_intervals:
         attrs["latest_intervals"] = summary.get("latest_intervals", [])
+    if include_intervals_by_day:
+        intervals_by_day = summary.get("intervals_by_day", [])
+        intervals_by_day_rows = (
+            intervals_by_day if isinstance(intervals_by_day, list) else []
+        )
+        attrs["intervals_by_day"] = _recent_rows(intervals_by_day_rows)
+        attrs["intervals_by_day_count"] = len(intervals_by_day_rows)
+        attrs["intervals_by_day_truncated"] = (
+            len(intervals_by_day_rows) > ATTR_RECENT_ROW_LIMIT
+        )
     return attrs
 
 
@@ -197,6 +208,24 @@ def cost_attributes(summary: dict[str, Any]) -> dict[str, Any]:
         "available_daily_count": len(available_rows),
         "available_daily_truncated": len(available_rows) > ATTR_RECENT_ROW_LIMIT,
         "categories": summary.get("categories", []),
+        "charge_type_totals": summary.get("charge_type_totals", []),
+    }
+
+
+def calculated_cost_attributes(summary: dict[str, Any]) -> dict[str, Any]:
+    """Return recorder-safe calculated (rate-schedule based) cost attributes."""
+    daily = summary.get("daily", [])
+    daily_rows = daily if isinstance(daily, list) else []
+    latest = daily_rows[-1] if daily_rows else None
+    return {
+        "days": summary.get("days", 0),
+        "latest_day": summary.get("latest_day"),
+        "total_cost": summary.get("total_cost"),
+        "latest_day_periods": latest.get("periods", []) if latest else [],
+        "latest_day_unassigned_kwh": latest.get("unassigned_kwh") if latest else None,
+        "daily": _recent_rows(daily_rows),
+        "daily_count": len(daily_rows),
+        "daily_truncated": len(daily_rows) > ATTR_RECENT_ROW_LIMIT,
     }
 
 
@@ -304,6 +333,19 @@ def _meter_type_rank(meter: dict[str, Any]) -> int:
     return 0
 
 
+def meter_type_description(
+    meter_types_payload: dict[str, Any] | None,
+    serial_number: Any,
+) -> str | None:
+    """Look up a human-readable meter type (e.g. 'Smart') by serial number."""
+    if not serial_number:
+        return None
+    lookup = _payload_data(meter_types_payload)
+    if not isinstance(lookup, dict):
+        return None
+    return lookup.get(str(serial_number))
+
+
 def select_meter_for_service(
     service: dict[str, Any],
     meters_payload: dict[str, Any] | None,
@@ -355,9 +397,13 @@ def _build_register_summary(
 ) -> dict[str, Any]:
     """Summarise a list of usage rows for a single register (E1 or B1).
 
-    Each day has multiple rows (one per time-of-use period). Group by date
-    so that daily totals and latest_day_usage are correct sums, not a single
-    time-of-use period's value.
+    Each day has multiple rows (one per time-of-use period, e.g. Peak/Offpeak).
+    Group by date so that daily totals and latest_day_usage are correct sums,
+    not a single time-of-use period's value. The portal attaches the *same*
+    full-day usageArray to every time-of-use row for a given suffix (only the
+    scalar `usage` differs per period), so interval arrays must be taken once
+    per (date, suffix) pair rather than summed across TOU rows, or they end
+    up double- (or triple-) counted for time-of-use tariffs.
     """
     if not rows:
         return {
@@ -371,6 +417,7 @@ def _build_register_summary(
 
     # Group rows by date
     by_date: dict[str, dict[str, Any]] = {}
+    seen_interval_keys: set[tuple[str, str]] = set()
     for row in rows:
         d = row.get("readDate") or ""
         usage = _as_float(row.get("usage")) or 0.0
@@ -383,9 +430,15 @@ def _build_register_summary(
                 "intervals": None,
             }
         by_date[d]["usage"] += usage
-        # Element-wise sum of usageArrays across all time-of-use periods for the day
+
         arr = row.get("usageArray")
-        if isinstance(arr, list) and arr:
+        interval_key = (d, str(row.get("suffix") or ""))
+        if (
+            isinstance(arr, list)
+            and arr
+            and interval_key not in seen_interval_keys
+        ):
+            seen_interval_keys.add(interval_key)
             existing = by_date[d]["intervals"]
             if existing is None:
                 by_date[d]["intervals"] = list(arr)
@@ -414,6 +467,15 @@ def _build_register_summary(
     if latest_entry and isinstance(latest_entry["intervals"], list):
         latest_intervals = [_round(_as_float(v), 5) for v in latest_entry["intervals"]]
 
+    intervals_by_day = [
+        {
+            "readDate": v["readDate"],
+            "intervals": [_round(_as_float(x), 5) for x in v["intervals"]],
+        }
+        for v in sorted(by_date.values(), key=lambda x: x["readDate"])
+        if isinstance(v["intervals"], list)
+    ]
+
     return {
         "days": len(by_date),
         "total": _round(total),
@@ -421,6 +483,7 @@ def _build_register_summary(
         "latest_day_usage": _round(latest_entry["usage"]) if latest_entry else None,
         "daily": daily,
         "latest_intervals": latest_intervals,
+        "intervals_by_day": intervals_by_day,
     }
 
 
@@ -494,6 +557,7 @@ def build_usage_summary(
             "latest_day_usage": None,
             "daily": [],
             "latest_intervals": [],
+            "intervals_by_day": [],
             "total_export": None,
             "latest_day_export": None,
             "export_daily": [],
@@ -513,6 +577,7 @@ def build_usage_summary(
         "latest_day_usage": import_summary["latest_day_usage"],
         "daily": import_summary["daily"],
         "latest_intervals": import_summary["latest_intervals"],
+        "intervals_by_day": import_summary["intervals_by_day"],
         "total_export": export_summary["total"],
         "latest_day_export": export_summary["latest_day_usage"],
         "export_daily": export_summary["daily"],
@@ -587,6 +652,7 @@ def build_cost_summary(cost_payload: dict[str, Any] | None) -> dict[str, Any]:
     daily_totals: dict[str, float] = {}
     available_daily: list[dict[str, Any]] = []
     categories: dict[str, dict[str, Any]] = {}
+    charge_types: dict[str, dict[str, Any]] = {}
     total_amount = 0.0
     total_quantity = 0.0
     grouped_rows: dict[str, list[dict[str, Any]]] = {}
@@ -630,6 +696,19 @@ def build_cost_summary(cost_payload: dict[str, Any] | None) -> dict[str, Any]:
             }
         categories[category]["amount"] += amount
         categories[category]["quantity"] += quantity
+
+        charge_type = row.get("chargeType")
+        if charge_type:
+            charge_type_key = str(charge_type).strip()
+            if charge_type_key not in charge_types:
+                charge_types[charge_type_key] = {
+                    "chargeType": charge_type,
+                    "amount": 0.0,
+                    "quantity": 0.0,
+                }
+            charge_types[charge_type_key]["amount"] += amount
+            charge_types[charge_type_key]["quantity"] += quantity
+
         daily.append(item)
 
     # GloBird returns multiple rows per day (SOLAR, USAGE, SUPPLY, etc.). Sum all
@@ -677,6 +756,14 @@ def build_cost_summary(cost_payload: dict[str, Any] | None) -> dict[str, Any]:
                 "quantity": _round(value["quantity"]),
             }
             for _, value in sorted(categories.items())
+        ],
+        "charge_type_totals": [
+            {
+                "chargeType": value["chargeType"],
+                "amount": _round(value["amount"], 2),
+                "quantity": _round(value["quantity"]),
+            }
+            for _, value in sorted(charge_types.items())
         ],
     }
 
@@ -799,6 +886,397 @@ def _build_projected_month_summary(
         "completed_days": completed_days,
         "days_in_month": days_in_month,
         "latest_day": latest_day.isoformat(),
+    }
+
+
+def _parse_clock_minutes(value: Any) -> int:
+    """Parse an HH:MM clock string into minutes since midnight (24:00 -> 1440)."""
+    raw = str(value).strip()
+    parts = raw.split(":")
+    if len(parts) < 2:
+        raise ValueError(f"Invalid time '{value}'")
+    hour = int(parts[0])
+    minute = int(parts[1])
+    if hour == 24 and minute == 0:
+        return 1440
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        raise ValueError(f"Invalid time '{value}'")
+    return hour * 60 + minute
+
+
+def parse_tou_rate_schedule(raw: str | None) -> dict[str, Any] | None:
+    """Parse and validate a user-configured time-of-use rate schedule.
+
+    GloBird's API does not expose usable $/kWh rate data, so a schedule
+    entered from the customer's own contract/bill is the only source. Expected
+    shape (rates in $/kWh, supply_charge in $/day, windows as [start, end)
+    24-hour clock pairs, "24:00" meaning midnight at the end of the day)::
+
+        {
+            "supply_charge": 1.12,
+            "periods": [
+                {"name": "Offpeak Usage", "rate": 0.28,
+                 "windows": [["00:00", "15:00"], ["21:00", "24:00"]]},
+                {"name": "Peak Usage", "rate": 0.45,
+                 "windows": [["15:00", "21:00"]]}
+            ]
+        }
+
+    `name` should match the usage register's chargeType (e.g. "Peak Usage")
+    so the breakdown lines up with what the portal itself reports, but it is
+    only used as a label here - the windows are what select the rate.
+
+    Returns None when raw is empty/not configured. Raises ValueError for
+    malformed input so callers can surface a clear config error.
+    """
+    text = (raw or "").strip()
+    if not text:
+        return None
+
+    parsed = json.loads(text)
+    if not isinstance(parsed, dict):
+        raise ValueError("TOU rate schedule must be a JSON object")
+
+    periods_raw = parsed.get("periods")
+    if not isinstance(periods_raw, list) or not periods_raw:
+        raise ValueError("TOU rate schedule must include a non-empty 'periods' list")
+
+    periods: list[dict[str, Any]] = []
+    for period in periods_raw:
+        if not isinstance(period, dict):
+            raise ValueError("Each TOU period must be a JSON object")
+        name = str(period.get("name") or "").strip()
+        rate = _as_float(period.get("rate"))
+        windows_raw = period.get("windows")
+        if (
+            not name
+            or rate is None
+            or not isinstance(windows_raw, list)
+            or not windows_raw
+        ):
+            raise ValueError(f"Invalid TOU period: {period!r}")
+
+        windows: list[tuple[int, int]] = []
+        for window in windows_raw:
+            if not isinstance(window, (list, tuple)) or len(window) != 2:
+                raise ValueError(f"Invalid TOU window: {window!r}")
+            start = _parse_clock_minutes(window[0])
+            end = _parse_clock_minutes(window[1])
+            if end <= start:
+                raise ValueError(f"TOU window end must be after start: {window!r}")
+            windows.append((start, end))
+
+        periods.append({"name": name, "rate": rate, "windows": windows})
+
+    supply_charge = _as_float(parsed.get("supply_charge")) or 0.0
+    return {"supply_charge": supply_charge, "periods": periods}
+
+
+def calculate_tou_cost(
+    intervals_by_day: list[dict[str, Any]],
+    schedule: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Calculate estimated daily cost from interval usage and a TOU rate schedule."""
+    empty: dict[str, Any] = {
+        "days": 0,
+        "daily": [],
+        "latest_day": None,
+        "latest_day_cost": None,
+        "total_cost": None,
+    }
+    if not schedule or not isinstance(intervals_by_day, list):
+        return empty
+
+    periods = schedule.get("periods") or []
+    supply_charge = schedule.get("supply_charge") or 0.0
+
+    daily: list[dict[str, Any]] = []
+    for row in intervals_by_day:
+        if not isinstance(row, dict):
+            continue
+        read_date = row.get("readDate")
+        intervals = row.get("intervals")
+        if not read_date or not isinstance(intervals, list) or not intervals:
+            continue
+
+        minutes_per_interval = 1440 // len(intervals)
+        period_totals: dict[str, dict[str, Any]] = {
+            period["name"]: {"kwh": 0.0, "cost": 0.0, "rate": period["rate"]}
+            for period in periods
+        }
+        unassigned_kwh = 0.0
+
+        for index, value in enumerate(intervals):
+            usage = _as_float(value) or 0.0
+            interval_start = index * minutes_per_interval
+            matched = next(
+                (
+                    period
+                    for period in periods
+                    if any(
+                        start <= interval_start < end
+                        for start, end in period["windows"]
+                    )
+                ),
+                None,
+            )
+            if matched is None:
+                unassigned_kwh += usage
+                continue
+            bucket = period_totals[matched["name"]]
+            bucket["kwh"] += usage
+            bucket["cost"] += usage * matched["rate"]
+
+        usage_cost = sum(bucket["cost"] for bucket in period_totals.values())
+        total_cost = usage_cost + supply_charge
+
+        daily.append(
+            {
+                "readDate": read_date,
+                "total_cost": _round(total_cost, 2),
+                "usage_cost": _round(usage_cost, 2),
+                "supply_charge": _round(supply_charge, 2),
+                "unassigned_kwh": _round(unassigned_kwh, 3),
+                "periods": [
+                    {
+                        "name": name,
+                        "kwh": _round(bucket["kwh"], 3),
+                        "cost": _round(bucket["cost"], 2),
+                        "rate": bucket["rate"],
+                    }
+                    for name, bucket in period_totals.items()
+                ],
+            }
+        )
+
+    if not daily:
+        return empty
+
+    daily.sort(key=lambda row: row["readDate"])
+    latest = daily[-1]
+    return {
+        "days": len(daily),
+        "daily": daily,
+        "latest_day": latest["readDate"],
+        "latest_day_cost": latest["total_cost"],
+        "total_cost": _round(sum(row["total_cost"] for row in daily), 2),
+    }
+
+
+def parse_gas_rate_schedule(raw: str | None) -> dict[str, Any] | None:
+    """Parse and validate a user-configured gas rate schedule.
+
+    Gas billing shapes nothing like electricity time-of-use: it is a daily
+    charge plus a seasonal, inclining-block $/MJ rate applied to *average*
+    daily usage across the meter read period (gas basic meters are read
+    periodically, not daily, so retailers bill on the average). GloBird
+    reports gas meter reads in the read unit (typically m3), so a heating
+    value conversion factor to MJ is required. Expected shape::
+
+        {
+            "daily_charge": 0.58685,
+            "conversion_mj_per_unit": 38.6,
+            "seasons": [
+                {"name": "Summer", "months": [10, 11, 12, 1, 2, 3],
+                 "tiers": [{"limit_mj_per_day": 20.70, "rate": 0.03735},
+                           {"limit_mj_per_day": null, "rate": 0.02934}]},
+                {"name": "Winter", "months": [4, 5, 6, 7, 8, 9],
+                 "tiers": [{"limit_mj_per_day": 20.70, "rate": 0.03735},
+                           {"limit_mj_per_day": null, "rate": 0.02934}]}
+            ]
+        }
+
+    Tiers apply in order to average daily MJ usage; a `limit_mj_per_day` of
+    null means "the remainder" and should only appear on the last tier.
+
+    Returns None when raw is empty/not configured. Raises ValueError for
+    malformed input so callers can surface a clear config error.
+    """
+    text = (raw or "").strip()
+    if not text:
+        return None
+
+    parsed = json.loads(text)
+    if not isinstance(parsed, dict):
+        raise ValueError("Gas rate schedule must be a JSON object")
+
+    seasons_raw = parsed.get("seasons")
+    if not isinstance(seasons_raw, list) or not seasons_raw:
+        raise ValueError("Gas rate schedule must include a non-empty 'seasons' list")
+
+    seasons: list[dict[str, Any]] = []
+    for season in seasons_raw:
+        if not isinstance(season, dict):
+            raise ValueError("Each gas season must be a JSON object")
+
+        months_raw = season.get("months")
+        if not isinstance(months_raw, list) or not months_raw:
+            raise ValueError(f"Invalid gas season months: {season!r}")
+        months: list[int] = []
+        for value in months_raw:
+            month = int(value)
+            if not (1 <= month <= 12):
+                raise ValueError(f"Invalid month '{value}' in gas season: {season!r}")
+            months.append(month)
+
+        tiers_raw = season.get("tiers")
+        if not isinstance(tiers_raw, list) or not tiers_raw:
+            raise ValueError(f"Invalid gas season tiers: {season!r}")
+        tiers: list[dict[str, Any]] = []
+        for tier in tiers_raw:
+            if not isinstance(tier, dict):
+                raise ValueError(f"Invalid gas tier: {tier!r}")
+            rate = _as_float(tier.get("rate"))
+            if rate is None:
+                raise ValueError(f"Invalid gas tier rate: {tier!r}")
+            limit_raw = tier.get("limit_mj_per_day")
+            limit = _as_float(limit_raw) if limit_raw is not None else None
+            tiers.append({"limit_mj_per_day": limit, "rate": rate})
+
+        seasons.append(
+            {
+                "name": str(season.get("name") or "").strip() or None,
+                "months": months,
+                "tiers": tiers,
+            }
+        )
+
+    conversion = _as_float(parsed.get("conversion_mj_per_unit"))
+    if conversion is None or conversion <= 0:
+        raise ValueError(
+            "Gas rate schedule must include a positive 'conversion_mj_per_unit'"
+        )
+    daily_charge = _as_float(parsed.get("daily_charge")) or 0.0
+
+    return {
+        "daily_charge": daily_charge,
+        "conversion_mj_per_unit": conversion,
+        "seasons": seasons,
+    }
+
+
+def _gas_season_for_date(day: date, seasons: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Return the configured season covering a given date's month."""
+    return next((season for season in seasons if day.month in season["months"]), None)
+
+
+def _gas_tiered_usage_cost(daily_mj: float, tiers: list[dict[str, Any]]) -> float:
+    """Apply inclining-block $/MJ tiers to an average daily MJ usage figure."""
+    remaining = daily_mj
+    cost = 0.0
+    for tier in tiers:
+        if remaining <= 0:
+            break
+        limit = tier["limit_mj_per_day"]
+        if limit is None:
+            cost += remaining * tier["rate"]
+            remaining = 0.0
+            break
+        take = min(remaining, limit)
+        cost += take * tier["rate"]
+        remaining -= take
+    return cost
+
+
+def calculate_gas_cost(
+    history: list[dict[str, Any]],
+    schedule: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Calculate estimated gas cost per meter-read period from a rate schedule.
+
+    Gas basic meters are read periodically (not daily), so each consecutive
+    pair of reads for the same meter becomes one billed period: usage is
+    converted to MJ, averaged over the days in that period, tiered per the
+    matching season, and a per-day supply charge is added for the period.
+    Meter replacements (a lower read on a new serial) are skipped rather
+    than treated as negative usage, mirroring the recorder statistics import.
+    """
+    empty: dict[str, Any] = {
+        "periods": [],
+        "latest_period_cost": None,
+        "total_cost": None,
+    }
+    if not schedule or not isinstance(history, list):
+        return empty
+
+    rows = sorted(
+        (
+            row
+            for row in history
+            if isinstance(row, dict)
+            and _parse_date(row.get("date")) is not None
+            and isinstance(row.get("read_index"), (int, float))
+        ),
+        key=lambda row: (str(row.get("date") or ""), str(row.get("serial") or "")),
+    )
+    if len(rows) < 2:
+        return empty
+
+    conversion = schedule["conversion_mj_per_unit"]
+    daily_charge = schedule.get("daily_charge") or 0.0
+    seasons = schedule.get("seasons") or []
+
+    meter_high_water: dict[str, float] = {}
+    periods: list[dict[str, Any]] = []
+    previous_row: dict[str, Any] | None = None
+
+    for row in rows:
+        reading = float(row["read_index"])
+        meter_key = str(row.get("serial") or "unknown")
+        previous_reading = meter_high_water.get(meter_key)
+        meter_high_water[meter_key] = (
+            reading if previous_reading is None else max(previous_reading, reading)
+        )
+
+        if previous_row is not None and previous_reading is not None and reading > previous_reading:
+            start_day = _parse_date(previous_row.get("date"))
+            end_day = _parse_date(row.get("date"))
+            days = (end_day - start_day).days if start_day and end_day else 0
+            if days > 0:
+                units_used = reading - previous_reading
+                mj_used = units_used * conversion
+                avg_daily_mj = mj_used / days
+                season = _gas_season_for_date(end_day, seasons)
+                if season is not None:
+                    usage_cost = _gas_tiered_usage_cost(avg_daily_mj, season["tiers"]) * days
+                    daily_charge_cost = daily_charge * days
+                    periods.append(
+                        {
+                            "start": start_day.isoformat(),
+                            "end": end_day.isoformat(),
+                            "days": days,
+                            "mj_used": _round(mj_used, 3),
+                            "avg_daily_mj": _round(avg_daily_mj, 3),
+                            "season": season.get("name"),
+                            "usage_cost": _round(usage_cost, 2),
+                            "daily_charge_cost": _round(daily_charge_cost, 2),
+                            "total_cost": _round(usage_cost + daily_charge_cost, 2),
+                        }
+                    )
+        previous_row = row
+
+    if not periods:
+        return empty
+
+    periods.sort(key=lambda period: period["end"])
+    latest = periods[-1]
+    return {
+        "periods": periods,
+        "latest_period_cost": latest["total_cost"],
+        "total_cost": _round(sum(period["total_cost"] for period in periods), 2),
+    }
+
+
+def gas_cost_attributes(summary: dict[str, Any]) -> dict[str, Any]:
+    """Return recorder-safe calculated gas cost attributes."""
+    periods = summary.get("periods", [])
+    periods = periods if isinstance(periods, list) else []
+    return {
+        "periods": len(periods),
+        "latest_period_cost": summary.get("latest_period_cost"),
+        "total_cost": summary.get("total_cost"),
+        "recent_periods": _recent_rows(periods),
+        "periods_truncated": len(periods) > ATTR_RECENT_ROW_LIMIT,
     }
 
 

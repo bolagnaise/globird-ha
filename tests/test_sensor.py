@@ -141,6 +141,7 @@ update_coordinator.DataUpdateCoordinator = DataUpdateCoordinator
 update_coordinator.UpdateFailed = UpdateFailed
 recorder_models.StatisticMeanType = StatisticMeanType
 unit_conversion.VolumeConverter = types.SimpleNamespace(UNIT_CLASS="volume")
+unit_conversion.EnergyConverter = types.SimpleNamespace(UNIT_CLASS="energy")
 dt.now = lambda: datetime.now(timezone.utc)
 util.dt = dt
 util.unit_conversion = unit_conversion
@@ -426,6 +427,291 @@ def test_gas_statistics_ignore_downward_correction_without_double_counting() -> 
     )
 
     assert [row["sum"] for row in statistics] == [100.0, 100.0, 102.0]
+
+
+def test_usage_half_hourly_statistics_aggregate_into_hourly_buckets() -> None:
+    """Sub-hourly intervals are summed into hourly rows with a running sum.
+
+    Home Assistant's recorder rejects external statistics whose `start` is
+    not exactly on the hour, so even though GloBird reports finer-grained
+    intervals (5- or 30-minute), the statistics import must bucket them to
+    the hour before handing them to async_add_external_statistics.
+    """
+    local_tz = timezone(timedelta(hours=10))
+    statistics = sensor._build_usage_half_hourly_statistics(
+        [
+            {"readDate": "2026-04-23", "intervals": [0.1] * 48},
+            {"readDate": "2026-04-24", "intervals": [0.5, 1.5] + [0.0] * 46},
+        ],
+        tzinfo=local_tz,
+    )
+
+    # 24 hourly rows per day, not 48 half-hourly rows.
+    assert len(statistics) == 48
+    assert all(row["start"].minute == 0 and row["start"].second == 0 for row in statistics)
+    assert [row["state"] for row in statistics[:3]] == [0.2, 0.2, 0.2]
+    assert statistics[23]["sum"] == 4.8
+    assert statistics[24]["sum"] == 6.8
+    assert statistics[25]["sum"] == 6.8
+    assert statistics[0]["start"] == datetime(2026, 4, 23, 0, 0, tzinfo=local_tz)
+    assert statistics[1]["start"] == datetime(2026, 4, 23, 1, 0, tzinfo=local_tz)
+    assert statistics[24]["start"] == datetime(2026, 4, 24, 0, 0, tzinfo=local_tz)
+
+
+def test_usage_half_hourly_statistics_skip_days_without_intervals() -> None:
+    """Rows missing a parseable date or interval array are ignored, not errored."""
+    statistics = sensor._build_usage_half_hourly_statistics(
+        [
+            {"readDate": "not-a-date", "intervals": [1.0]},
+            {"readDate": "2026-04-24", "intervals": []},
+            {"readDate": "2026-04-25", "intervals": [1.0, 2.0]},
+        ],
+        tzinfo=timezone.utc,
+    )
+
+    assert len(statistics) == 2
+    assert statistics[0]["start"] == datetime(2026, 4, 25, 0, 0, tzinfo=timezone.utc)
+    assert statistics[0]["sum"] == 1.0
+    assert statistics[1]["start"] == datetime(2026, 4, 25, 12, 0, tzinfo=timezone.utc)
+    assert statistics[1]["sum"] == 3.0
+
+
+def test_usage_total_sensor_exposes_recent_intervals_by_day() -> None:
+    """Recent Usage Total attributes include a truncated intervals_by_day window."""
+
+    class FakeCoordinator:
+        data = {
+            "service_data": {
+                "svc-1": {
+                    "usage_summary": {
+                        "total_usage": 10.0,
+                        "intervals_by_day": [
+                            {"readDate": "2026-04-24", "intervals": [1.0, 2.0]}
+                        ],
+                        "daily": [],
+                        "registers": [],
+                    },
+                }
+            }
+        }
+
+    sensor_entity = sensor.GloBirdUsageTotalSensor(
+        FakeCoordinator(),
+        types.SimpleNamespace(entry_id="entry-1"),
+        {"accountServiceId": "svc-1", "siteIdentifier": "svc-1"},
+    )
+
+    attrs = sensor_entity.extra_state_attributes
+    assert attrs["intervals_by_day"] == [
+        {"readDate": "2026-04-24", "intervals": [1.0, 2.0]}
+    ]
+    assert attrs["intervals_by_day_count"] == 1
+    assert attrs["intervals_by_day_truncated"] is False
+
+
+def test_daily_cost_statistics_accumulate_across_days() -> None:
+    """Each day's net cost total becomes a statistic row with a running sum."""
+    local_tz = timezone(timedelta(hours=10))
+    statistics = sensor._build_daily_cost_statistics(
+        [
+            {"date": "2026/09/01", "amount": 2.47},
+            {"date": "2026/09/02", "amount": 2.35},
+            {"date": "2026/09/03", "amount": 2.55},
+        ],
+        tzinfo=local_tz,
+    )
+
+    assert [row["state"] for row in statistics] == [2.47, 2.35, 2.55]
+    assert [row["sum"] for row in statistics] == [2.47, 4.82, 7.37]
+    assert statistics[0]["start"] == datetime(2026, 9, 1, 0, 0, tzinfo=local_tz)
+    assert statistics[2]["start"] == datetime(2026, 9, 3, 0, 0, tzinfo=local_tz)
+
+
+def test_daily_cost_statistics_skip_rows_without_a_parseable_date_or_amount() -> None:
+    """Malformed rows are ignored rather than raising."""
+    statistics = sensor._build_daily_cost_statistics(
+        [
+            {"date": "not-a-date", "amount": 1.0},
+            {"date": "2026/09/01", "amount": None},
+            {"date": "2026/09/02", "amount": 3.0},
+        ],
+        tzinfo=timezone.utc,
+    )
+
+    assert len(statistics) == 1
+    assert statistics[0]["sum"] == 3.0
+
+
+def test_cost_total_sensor_statistic_id_matches_usage_pattern() -> None:
+    """Cost statistics reuse the same recorder-safe id derivation as usage/gas."""
+    suffix = sensor._safe_statistic_id("entry-1_service_svc-1_cost_total", "svc-1")
+    statistic_id = f"{sensor.DOMAIN}:{suffix}"
+    assert statistic_id.startswith(f"{sensor.DOMAIN}:")
+    assert "cost_total" in statistic_id
+
+
+def test_calculated_cost_sensor_unavailable_without_schedule() -> None:
+    """No configured TOU schedule means the sensor is unavailable, not zero."""
+
+    class FakeCoordinator:
+        data = {"service_data": {"svc-1": {"calculated_cost_summary": {}}}}
+
+    sensor_entity = sensor.GloBirdCalculatedCostSensor(
+        FakeCoordinator(),
+        types.SimpleNamespace(entry_id="entry-1"),
+        {"accountServiceId": "svc-1", "siteIdentifier": "svc-1", "serviceType": "Power"},
+    )
+
+    assert sensor_entity.available is False
+    assert sensor_entity.native_value is None
+
+
+def test_calculated_cost_sensor_exposes_latest_day_breakdown() -> None:
+    """With a schedule configured, state/attributes reflect the latest calculated day."""
+
+    class FakeCoordinator:
+        data = {
+            "tou_schedule_error": None,
+            "service_data": {
+                "svc-1": {
+                    "calculated_cost_summary": {
+                        "days": 1,
+                        "latest_day": "2026-09-01",
+                        "latest_day_cost": 3.40,
+                        "total_cost": 3.40,
+                        "daily": [
+                            {
+                                "readDate": "2026-09-01",
+                                "total_cost": 3.40,
+                                "usage_cost": 2.40,
+                                "supply_charge": 1.0,
+                                "unassigned_kwh": 0.0,
+                                "periods": [
+                                    {
+                                        "name": "Offpeak",
+                                        "kwh": 2.0,
+                                        "cost": 0.4,
+                                        "rate": 0.2,
+                                    },
+                                    {
+                                        "name": "Peak",
+                                        "kwh": 4.0,
+                                        "cost": 2.0,
+                                        "rate": 0.5,
+                                    },
+                                ],
+                            }
+                        ],
+                    }
+                }
+            },
+        }
+
+    sensor_entity = sensor.GloBirdCalculatedCostSensor(
+        FakeCoordinator(),
+        types.SimpleNamespace(entry_id="entry-1"),
+        {"accountServiceId": "svc-1", "siteIdentifier": "svc-1", "serviceType": "Power"},
+    )
+
+    assert sensor_entity.available is True
+    assert sensor_entity.native_value == 3.40
+    attrs = sensor_entity.extra_state_attributes
+    assert attrs["total_cost"] == 3.40
+    assert attrs["latest_day_unassigned_kwh"] == 0.0
+    assert len(attrs["latest_day_periods"]) == 2
+    assert attrs["schedule_error"] is None
+
+
+def test_calculated_gas_cost_sensor_unavailable_without_schedule() -> None:
+    """No configured gas rate schedule means the sensor is unavailable."""
+
+    class FakeCoordinator:
+        data = {"service_data": {"svc-gas": {"calculated_gas_cost_summary": {}}}}
+
+    sensor_entity = sensor.GloBirdCalculatedGasCostSensor(
+        FakeCoordinator(),
+        types.SimpleNamespace(entry_id="entry-1"),
+        {"accountServiceId": "svc-gas", "siteIdentifier": "svc-gas", "serviceType": "Gas"},
+    )
+
+    assert sensor_entity.available is False
+    assert sensor_entity.native_value is None
+
+
+def test_calculated_gas_cost_sensor_exposes_latest_period_breakdown() -> None:
+    """With a schedule configured, state/attributes reflect the latest billed period."""
+
+    class FakeCoordinator:
+        data = {
+            "gas_schedule_error": None,
+            "service_data": {
+                "svc-gas": {
+                    "calculated_gas_cost_summary": {
+                        "periods": [
+                            {
+                                "start": "2026-08-01",
+                                "end": "2026-08-31",
+                                "days": 30,
+                                "mj_used": 1158.0,
+                                "avg_daily_mj": 38.6,
+                                "season": "Winter",
+                                "usage_cost": 38.95,
+                                "daily_charge_cost": 17.61,
+                                "total_cost": 56.56,
+                            }
+                        ],
+                        "latest_period_cost": 56.56,
+                        "total_cost": 56.56,
+                    }
+                }
+            },
+        }
+
+    sensor_entity = sensor.GloBirdCalculatedGasCostSensor(
+        FakeCoordinator(),
+        types.SimpleNamespace(entry_id="entry-1"),
+        {"accountServiceId": "svc-gas", "siteIdentifier": "svc-gas", "serviceType": "Gas"},
+    )
+
+    assert sensor_entity.available is True
+    assert sensor_entity.native_value == 56.56
+    attrs = sensor_entity.extra_state_attributes
+    assert attrs["total_cost"] == 56.56
+    assert attrs["periods"] == 1
+    assert attrs["schedule_error"] is None
+
+
+def test_meter_info_sensor_exposes_meter_type_description() -> None:
+    """Meter Info attributes surface the looked-up meter type description."""
+
+    class FakeCoordinator:
+        data = {
+            "service_data": {
+                "svc-1": {
+                    "meter": {"meterReadType": "SMART", "serialStatus": "Energized"},
+                    "meter_type_description": "Smart",
+                }
+            }
+        }
+
+    sensor_entity = sensor.GloBirdMeterInfoSensor(
+        FakeCoordinator(),
+        types.SimpleNamespace(entry_id="entry-1"),
+        {"accountServiceId": "svc-1", "siteIdentifier": "svc-1", "serviceType": "Power"},
+    )
+
+    assert sensor_entity.extra_state_attributes["meter_type_description"] == "Smart"
+
+
+def test_weather_impacted_days_sensor_reads_numeric_value() -> None:
+    """Weather Impacted Days surfaces numberOfImpactedDays from the account payload."""
+    description = next(
+        d for d in sensor.GLOBAL_SENSORS if d.key == "weather_impacted_days"
+    )
+
+    data = {"weather_impacted_days": {"data": {"numberOfImpactedDays": 3}}}
+    assert description.value_fn(data) == 3
+    assert description.value_fn({}) is None
 
 
 def test_latest_gas_reading_sensor_exposes_reading_summary() -> None:
