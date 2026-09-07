@@ -441,12 +441,16 @@ def _is_export_register(row: dict[str, Any]) -> bool:
         return True
 
     direction = str(row.get("direction") or "").strip().lower()
-    if direction in {"export", "feed-in", "feed in", "solar"}:
+    if direction in {"export", "feed-in", "feed in"}:
         return True
 
     category = str(row.get("chargeCategoryCode") or "").strip().lower()
     charge_type = str(row.get("chargeType") or "").strip().lower()
-    export_markers = ("solar", "export", "feed")
+    # "Solar" alone is not a direction: GloBird also uses it in import-rate
+    # names such as "Solar Soak".  Prefer the meter register and an explicit
+    # direction above; the text fallback is only for legacy rows that identify
+    # actual export/feed-in without either of those fields.
+    export_markers = ("export", "feed")
     return any(marker in category for marker in export_markers) or any(
         marker in charge_type for marker in export_markers
     )

@@ -593,6 +593,43 @@ def test_usage_summary_tracks_all_registers_and_b_exports() -> None:
     assert usage["registers"][3]["direction"] == "export"
 
 
+def test_usage_summary_keeps_solar_soak_import_register_out_of_export() -> None:
+    """Solar-named shoulder rates are import usage, not feed-in energy."""
+    payload = {
+        "data": [
+            {
+                "readDate": "2026-09-07",
+                "usage": 4.2,
+                "suffix": "E1",
+                "chargeType": "Solar Soak",
+                "chargeCategoryCode": "SOLAR",
+                "usageArray": [2.1, 2.1],
+            },
+            {
+                "readDate": "2026-09-07",
+                "usage": 1.5,
+                "suffix": "B1",
+                "chargeType": "Solar Export",
+                "chargeCategoryCode": "SOLAR",
+                "usageArray": [0.5, 1.0],
+            },
+        ],
+        "message": None,
+        "success": True,
+    }
+
+    usage = build_usage_summary(payload)
+
+    assert usage["total_usage"] == 4.2
+    assert usage["latest_day_usage"] == 4.2
+    assert usage["total_export"] == 1.5
+    assert usage["latest_day_export"] == 1.5
+    assert [register["direction"] for register in usage["registers"]] == [
+        "export",
+        "import",
+    ]
+
+
 def test_cost_summary_exposes_new_category_totals() -> None:
     """Cost summaries preserve newer GloBird categories separately."""
     payload = {
