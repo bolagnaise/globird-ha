@@ -24,11 +24,17 @@
     "step": {
       "init": {
         "title": "GloBird HA options",
-        "description": "Set when automatic daily readiness polling resumes after the previous day is ready.",
+        "description": "Set when automatic daily readiness polling resumes after the previous day is ready. GloBird's API exposes no usable rate data, so pricing must come from your own contract/bill: optionally enter a time-of-use electricity rate schedule and/or a seasonal tiered gas rate schedule, both as JSON, to enable the Calculated TOU Cost and Calculated Gas Cost sensors - see the README for the expected format of each. Leave a field blank to leave its sensor unavailable.",
         "data": {
-          "daily_poll_start_time": "Daily polling start time"
+          "daily_poll_start_time": "Daily polling start time",
+          "tou_rate_schedule": "Electricity time-of-use rate schedule (JSON, optional)",
+          "gas_rate_schedule": "Gas rate schedule (JSON, optional)"
         }
       }
+    },
+    "error": {
+      "invalid_tou_rate_schedule": "Time-of-use rate schedule is not valid JSON or is missing required fields",
+      "invalid_gas_rate_schedule": "Gas rate schedule is not valid JSON or is missing required fields"
     }
   },
   "entity": {
@@ -83,6 +89,15 @@
       },
       "latest_day_cost": {
         "name": "Latest Daily Cost"
+      },
+      "calculated_cost": {
+        "name": "Calculated TOU Cost"
+      },
+      "calculated_gas_cost": {
+        "name": "Calculated Gas Cost"
+      },
+      "weather_impacted_days": {
+        "name": "Weather Impacted Days"
       },
       "zerohero_status": {
         "name": "ZeroHero Status"

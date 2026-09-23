@@ -45,6 +45,7 @@ Account-level sensors include:
 - Dashboard balance and recent transactions
 - Latest invoice
 - Signup services
+- Weather impacted days
 - Last successful refresh
 - Refresh status
 - One account summary sensor per returned account
@@ -66,6 +67,7 @@ Service-level sensors include:
 - Billing period days
 - Billing period cost
 - Weather summary
+- Calculated TOU cost (only when a rate schedule is configured)
 
 Gas service-level sensors include:
 
@@ -73,10 +75,19 @@ Gas service-level sensors include:
 - Meter info
 - Latest gas reading
 - Latest gas reading date
+- Calculated gas cost (only when a rate schedule is configured)
 
-Recorder-safe daily summaries, the latest interval array, compact usage register totals, cost category totals, daily net cost totals, and incomplete cost days are exposed as sensor attributes. Daily usage and cost attributes keep the most recent rows and include count/truncation flags; full cached snapshots are available through Home Assistant diagnostics with sensitive fields redacted.
+Recorder-safe daily summaries, the latest interval array, a recent window of per-day half-hourly interval breakdowns, compact usage register totals (including any time-of-use split such as Peak/Offpeak), cost category totals, a cost breakdown by time-of-use charge type when the portal provides one, daily net cost totals, and incomplete cost days are exposed as sensor attributes. Daily usage and cost attributes keep the most recent rows and include count/truncation flags; full cached snapshots are available through Home Assistant diagnostics with sensitive fields redacted. Meter Info exposes a human-readable meter type description (e.g. "Smart") alongside the raw meter row.
 
 For gas services, historical basic-meter readings are also imported into Home Assistant recorder long-term statistics so historical charts can be populated from existing portal read history. Meter replacements and corrected lower reads are handled without losing subsequent consumption.
+
+For electricity import usage, smart-meter intervals across the cached usage window (up to 31 days) are imported into Home Assistant recorder long-term statistics under the Recent Usage Total sensor, aggregated to hourly resolution. Home Assistant's recorder rejects external statistics whose timestamp is not exactly on the hour, so even though GloBird reports finer-grained intervals (commonly every 5 or 30 minutes depending on the meter), each hour's intervals are summed before import; the finer-grained data is still available uncombined via the `intervals_by_day` attribute and feeds the Calculated TOU Cost sensor's per-interval accuracy. This lets the built-in Energy Dashboard show real hourly consumption shape, not just daily totals, and backfills as far back as GloBird has published interval data. Like all GloBird data, this trails the portal by roughly a day. Solar export intervals are not currently imported into statistics, only into daily totals.
+
+The portal attaches the same full-day interval array to every time-of-use row (e.g. Peak and Offpeak) for a meter, with only the billed portion differing per row; the integration counts each day's interval array once per meter register rather than once per time-of-use row, so time-of-use accounts don't get their interval data double-counted.
+
+Net daily cost is also imported into recorder long-term statistics under the Recent Cost Total sensor (daily resolution only, since GloBird does not publish half-hourly cost detail). Pair it with the Recent Usage Total statistic as the cost stat for grid consumption in the Energy Dashboard's settings to see $ alongside kWh.
+
+Both statistics imports are additive only: every sync re-uploads the currently cached ~31-day window, which upserts (adds or corrects) that window and backfills any day GloBird has newly published, but never deletes or touches statistics outside that window. History older than 31 days that was written by a previous sync is left untouched in Home Assistant's recorder and is only ever removed by your own recorder purge configuration or a manual statistics fix, never by this integration.
 
 ## Updates and data freshness
 
@@ -88,7 +99,38 @@ ZeroHero status reports the latest complete portal result as `achieved` or `miss
 
 Expected Monthly Cost projects the current billing period from completed daily net cost totals, using the latest invoice issue date as the billing-period start and a 30-day period. Billing Period Cost uses the same daily net totals so it matches the projection inputs. Billing Period Days uses Home Assistant's local date rather than the host process timezone.
 
-Pricing/rate-plan sensors are not currently exposed. The portal exposes product metadata, but not enough rate detail has been validated to provide EMHASS-ready import/export price sensors safely.
+Pricing/rate-plan sensors are not populated from the portal. GloBird's API exposes only product metadata (plan name, start/end date, a couple of flags) through `getProductsByAccountId` and `getAllProductHistoriesByAccountId` — verified directly, neither returns $/kWh rate figures — so there isn't enough rate detail available to derive prices automatically or safely provide EMHASS-ready import/export price sensors.
+
+Instead, you can enter your own time-of-use rate schedule (from your contract/bill) as JSON in the integration options to enable the **Calculated TOU Cost** sensor per electricity service. It stays unavailable until a schedule is configured. Example:
+
+```json
+{
+  "supply_charge": 1.12,
+  "periods": [
+    {"name": "Offpeak Usage", "rate": 0.28, "windows": [["00:00", "15:00"], ["21:00", "24:00"]]},
+    {"name": "Peak Usage", "rate": 0.45, "windows": [["15:00", "21:00"]]}
+  ]
+}
+```
+
+Each period's `windows` are `[start, end)` 24-hour clock pairs (`"24:00"` means midnight at the end of the day); `name` is just a label (matching your bill's chargeType names, e.g. "Peak Usage", makes the breakdown easier to read but isn't required for the calculation to work). The sensor state is the latest calculated day's total cost; attributes include the per-period kWh/cost breakdown, a recent daily history, and `unassigned_kwh` for any usage that fell outside all configured windows (a sign the schedule doesn't fully cover the day and should be adjusted). The calculation uses the same real per-interval usage that feeds the half-hourly statistics import, so it reflects actual consumption shape, not just a daily total split evenly across periods.
+
+Gas billing is shaped completely differently — a daily supply charge plus a seasonal, inclining-block `$/MJ` rate applied to *average* daily usage across each meter-read period (gas basic meters aren't read daily), and GloBird reports gas reads in the meter's native unit (typically m³), so a heating-value conversion factor to MJ is needed too. Enter this separately as gas rate schedule JSON in options to enable the **Calculated Gas Cost** sensor per gas service. Example, matching a typical GLOSAVE-style gas rate card:
+
+```json
+{
+  "daily_charge": 0.58685,
+  "conversion_mj_per_unit": 38.6,
+  "seasons": [
+    {"name": "Summer", "months": [10, 11, 12, 1, 2, 3],
+     "tiers": [{"limit_mj_per_day": 20.70, "rate": 0.03735}, {"limit_mj_per_day": null, "rate": 0.02934}]},
+    {"name": "Winter", "months": [4, 5, 6, 7, 8, 9],
+     "tiers": [{"limit_mj_per_day": 20.70, "rate": 0.03735}, {"limit_mj_per_day": null, "rate": 0.02934}]}
+  ]
+}
+```
+
+`conversion_mj_per_unit` is the heating value for your network (check your gas bill — it's usually printed there, and varies by distributor, roughly 37.7–39.3 MJ/m³). Tiers apply in order to average daily MJ usage for that read period; a `limit_mj_per_day` of `null` means "the remainder" and should only appear on the last tier. The sensor state is the most recently completed meter-read period's total cost (daily charge + tiered usage cost); attributes include a recent history of billed periods.
 
 ## Notes
 

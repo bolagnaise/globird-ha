@@ -9,11 +9,19 @@ from homeassistant import config_entries
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers import selector
 
-from .api import GloBirdAuthError, GloBirdCaptchaRequired, GloBirdClient
+from .api import (
+    GloBirdAuthError,
+    GloBirdCaptchaRequired,
+    GloBirdClient,
+    parse_gas_rate_schedule,
+    parse_tou_rate_schedule,
+)
 from .const import (
     CONF_DAILY_POLL_START_TIME,
     CONF_EMAIL,
+    CONF_GAS_RATE_SCHEDULE,
     CONF_PASSWORD,
+    CONF_TOU_RATE_SCHEDULE,
     DEFAULT_DAILY_POLL_START_TIME,
     DOMAIN,
 )
@@ -90,13 +98,29 @@ class GloBirdOptionsFlow(config_entries.OptionsFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Manage integration options."""
+        errors: dict[str, str] = {}
+
         if user_input is not None:
-            return self.async_create_entry(title="", data=user_input)
+            try:
+                parse_tou_rate_schedule(user_input.get(CONF_TOU_RATE_SCHEDULE))
+            except (ValueError, TypeError):
+                errors["base"] = "invalid_tou_rate_schedule"
+
+            if not errors:
+                try:
+                    parse_gas_rate_schedule(user_input.get(CONF_GAS_RATE_SCHEDULE))
+                except (ValueError, TypeError):
+                    errors["base"] = "invalid_gas_rate_schedule"
+
+            if not errors:
+                return self.async_create_entry(title="", data=user_input)
 
         current_time = self.config_entry.options.get(
             CONF_DAILY_POLL_START_TIME,
             DEFAULT_DAILY_POLL_START_TIME,
         )
+        current_tou_schedule = self.config_entry.options.get(CONF_TOU_RATE_SCHEDULE, "")
+        current_gas_schedule = self.config_entry.options.get(CONF_GAS_RATE_SCHEDULE, "")
 
         return self.async_show_form(
             step_id="init",
@@ -106,6 +130,25 @@ class GloBirdOptionsFlow(config_entries.OptionsFlow):
                         CONF_DAILY_POLL_START_TIME,
                         default=current_time,
                     ): selector.TimeSelector(),
+                    vol.Optional(
+                        CONF_TOU_RATE_SCHEDULE,
+                        default=current_tou_schedule,
+                    ): selector.TextSelector(
+                        selector.TextSelectorConfig(
+                            type=selector.TextSelectorType.TEXT,
+                            multiline=True,
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_GAS_RATE_SCHEDULE,
+                        default=current_gas_schedule,
+                    ): selector.TextSelector(
+                        selector.TextSelectorConfig(
+                            type=selector.TextSelectorType.TEXT,
+                            multiline=True,
+                        )
+                    ),
                 }
             ),
+            errors=errors,
         )
