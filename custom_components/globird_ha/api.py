@@ -22,6 +22,10 @@ from .const import BASE_URL, DEFAULT_USAGE_DAYS, SENSITIVE_KEYS
 _LOGGER = logging.getLogger(__name__)
 
 ATTR_RECENT_ROW_LIMIT = 7
+# daily_totals rows are only {"date", "amount"} (~45 bytes each), so a full
+# billing period fits well inside the recorder attribute budget. Keeping it at
+# 7 truncates any card charting more than a week of daily cost.
+ATTR_DAILY_TOTALS_ROW_LIMIT = 35
 
 
 class GloBirdApiError(Exception):
@@ -192,7 +196,9 @@ def cost_attributes(summary: dict[str, Any]) -> dict[str, Any]:
         "daily": _recent_rows(daily_rows),
         "daily_count": len(daily_rows),
         "daily_truncated": len(daily_rows) > ATTR_RECENT_ROW_LIMIT,
-        "daily_totals": _recent_rows(summary.get("daily_totals", [])),
+        "daily_totals": _recent_rows(
+            summary.get("daily_totals", []), limit=ATTR_DAILY_TOTALS_ROW_LIMIT
+        ),
         "available_daily": _recent_rows(available_rows),
         "available_daily_count": len(available_rows),
         "available_daily_truncated": len(available_rows) > ATTR_RECENT_ROW_LIMIT,
