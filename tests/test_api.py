@@ -872,6 +872,8 @@ def test_sensor_attributes_are_recorder_safe_summaries() -> None:
     assert len(cost["daily"]) == 7
     assert len(cost["available_daily"]) == 7
     assert cost["daily_truncated"] is True
+    assert len(cost["daily_totals"]) == api.ATTR_DAILY_TOTALS_ROW_LIMIT
+    assert cost["daily_totals"][-1]["date"] == "2026/05/15"
     assert len(json.dumps(usage)) < 16_384
     assert len(json.dumps(cost)) < 16_384
 
