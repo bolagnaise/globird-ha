@@ -9,6 +9,7 @@ from homeassistant.core import HomeAssistant
 
 from .const import DOMAIN
 from .coordinator import GloBirdCoordinator
+from .electricity_import import async_setup_electricity_statistics
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -25,6 +26,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN][entry.entry_id] = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
+    entry.async_on_unload(async_setup_electricity_statistics(hass, entry, coordinator))
     entry.async_on_unload(entry.add_update_listener(async_update_options))
     return True
 

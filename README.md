@@ -90,6 +90,18 @@ Recorder-safe daily summaries, the latest interval array, compact usage register
 
 For gas services, historical basic-meter readings are also imported into Home Assistant recorder long-term statistics so historical charts can be populated from existing portal read history. Meter replacements and corrected lower reads are handled without losing subsequent consumption.
 
+Electricity interval history is imported the same way, without extra portal requests. Each refresh turns the cached half-hour readings into hourly external statistics:
+
+- **GloBird Grid import** is general import plus controlled load.
+- **GloBird General import** is the general register, usually E1.
+- **GloBird Controlled load** is controlled load, usually E2, and is omitted when the service has none.
+
+Statistic IDs are scoped to the config entry and electricity service, with `globird_ha` as the source. A second electricity service is labelled `(2)`.
+
+In **Settings > Dashboards > Energy > Electricity grid**, add either the grid-import statistic or the separate general and controlled statistics. Adding the combined statistic together with its components counts the same electricity twice. The existing usage sensors are rolling portal totals, so they are not the Energy Dashboard source.
+
+The portal cache is about 31 days. A corrected day still inside that cache updates the affected hours and every later cumulative sum. A correction older than the cache is not visible and is left unchanged. The current local day is not imported. Importing can be turned off from the integration options; existing statistics are left in place.
+
 ## Updates and data freshness
 
 Home Assistant polls the GloBird portal every 30 minutes until all discovered electricity services have `ready` latest data for yesterday or newer. Gas services do not block that readiness check because basic-meter reads are not published daily. Once the electricity data is ready, or after a successful refresh for a gas-only account, polling slows until the configured daily polling start time on the next day to avoid unnecessary portal requests and repeated recorder updates for data that will not change again that day. The default start time is 00:05 local Home Assistant time, and it can be changed from the integration options if your GloBird account normally publishes data later. You can still force a check at any time with Home Assistant's standard **Update entity** action on any GloBird entity. Refresh Status only reports whether the latest portal fetch completed; it does not mean GloBird has finished publishing all derived daily usage, cost, and ZeroHero values.

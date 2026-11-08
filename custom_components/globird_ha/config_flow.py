@@ -13,8 +13,10 @@ from .api import GloBirdAuthError, GloBirdCaptchaRequired, GloBirdClient
 from .const import (
     CONF_DAILY_POLL_START_TIME,
     CONF_EMAIL,
+    CONF_IMPORT_ELECTRICITY_STATISTICS,
     CONF_PASSWORD,
     DEFAULT_DAILY_POLL_START_TIME,
+    DEFAULT_IMPORT_ELECTRICITY_STATISTICS,
     DOMAIN,
 )
 
@@ -97,6 +99,10 @@ class GloBirdOptionsFlow(config_entries.OptionsFlow):
             CONF_DAILY_POLL_START_TIME,
             DEFAULT_DAILY_POLL_START_TIME,
         )
+        import_statistics = self.config_entry.options.get(
+            CONF_IMPORT_ELECTRICITY_STATISTICS,
+            DEFAULT_IMPORT_ELECTRICITY_STATISTICS,
+        )
 
         return self.async_show_form(
             step_id="init",
@@ -106,6 +112,10 @@ class GloBirdOptionsFlow(config_entries.OptionsFlow):
                         CONF_DAILY_POLL_START_TIME,
                         default=current_time,
                     ): selector.TimeSelector(),
+                    vol.Required(
+                        CONF_IMPORT_ELECTRICITY_STATISTICS,
+                        default=import_statistics,
+                    ): selector.BooleanSelector(),
                 }
             ),
         )

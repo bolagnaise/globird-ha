@@ -92,6 +92,10 @@ class TimeSelector:
     """Minimal time selector."""
 
 
+class BooleanSelector:
+    """Minimal boolean selector."""
+
+
 config_entries.ConfigEntry = ConfigEntry
 config_entries.ConfigFlow = ConfigFlow
 config_entries.OptionsFlow = OptionsFlow
@@ -102,6 +106,7 @@ selector.TextSelector = TextSelector
 selector.TextSelectorConfig = lambda **kwargs: kwargs
 selector.TextSelectorType = types.SimpleNamespace(PASSWORD="password")
 selector.TimeSelector = TimeSelector
+selector.BooleanSelector = BooleanSelector
 helpers.selector = selector
 homeassistant.config_entries = config_entries
 homeassistant.data_entry_flow = data_entry_flow
@@ -135,6 +140,13 @@ def test_options_flow_uses_ha_attached_config_entry_for_current_value() -> None:
     assert result["type"] == "form"
     assert result["step_id"] == "init"
     assert "daily_poll_start_time" in str(result["data_schema"])
+    assert "import_electricity_statistics" in str(result["data_schema"])
+    import_field = next(
+        key
+        for key in result["data_schema"]
+        if getattr(key, "key", None) == "import_electricity_statistics"
+    )
+    assert import_field.default is True
 
 
 def test_options_flow_saves_daily_poll_start_time() -> None:
