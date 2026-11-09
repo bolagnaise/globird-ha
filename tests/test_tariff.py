@@ -164,10 +164,12 @@ def test_infer_tariff_recovers_plan_rates() -> None:
     usage, cost = make_history()
     result = tariff.infer_tariff(usage, cost)
 
-    assert abs(_component(result, "Shoulder Usage")["rate"] - SHOULDER) < 0.002
+    # Well-observed rates snap exactly to the published 0.1 c values.
+    assert _component(result, "Shoulder Usage")["rate"] == SHOULDER
+    assert abs(_component(result, "Shoulder Usage")["fitted_rate"] - SHOULDER) < 0.002
     assert abs(_component(result, "Peak Usage")["rate"] - PEAK) < 0.01
     assert _component(result, "Offpeak Usage")["rate"] == 0.0
-    assert abs(_component(result, "Solar/Generation Feed in (4pm-11pm)")["rate"] - FIT_PEAK) < 0.002
+    assert _component(result, "Solar/Generation Feed in (4pm-11pm)")["rate"] == FIT_PEAK
     assert _component(result, "Solar/Generation Feed in (11pm-4pm)")["rate"] == 0.0
     assert _component(result, "Shoulder Usage")["confidence"] == "high"
     assert result["supply"]["rate"] == 1.47
@@ -187,7 +189,7 @@ def test_super_export_rate_and_cap_are_inferred() -> None:
     usage, cost = make_history(days=30)
     info = tariff.infer_tariff(usage, cost)["super_export"]
 
-    assert abs(info["rate"] - SUPER_EXPORT) < 0.0005
+    assert info["rate"] == SUPER_EXPORT
     assert info["capped_days"] > 0
     assert info["cap_kwh"] == SUPER_EXPORT_CAP
     assert info["windows"] == [[1080, 1260]]
@@ -340,3 +342,11 @@ def test_live_tracker_round_trips_state() -> None:
 
     restored = tariff.LiveCostTracker(tracker.as_dict())
     assert restored.as_dict() == tracker.as_dict()
+
+
+def test_snap_rate_rounds_to_tenth_of_a_cent() -> None:
+    assert tariff.snap_rate(0.32994) == 0.33
+    assert tariff.snap_rate(0.05012) == 0.05
+    assert tariff.snap_rate(0.09987) == 0.1
+    assert tariff.snap_rate(0.45936) == 0.459
+    assert tariff.snap_rate(0.2974) == 0.297

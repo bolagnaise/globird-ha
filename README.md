@@ -90,7 +90,7 @@ Expected Monthly Cost projects the current billing period from completed daily n
 
 ## Rates and live pricing
 
-GloBird's portal does not publish plan rates through the endpoints this integration reads, but it does publish what is needed to recover them. Every smart-meter usage row names its charge (`Peak Usage`, `Offpeak Usage`, `Solar/Generation Feed in (4pm-11pm)`, `Super Export top up`, `ZeroHero`...) and the local time windows it applies to, and `CostDetail` returns the billed amount per day for each cost category. Each refresh rebuilds the plan's windows from the newest usage day, so a plan change is picked up automatically. Rates are then fitted per cost category by least squares across the complete days in the 31-day window.
+GloBird's portal does not publish plan rates through the endpoints this integration reads, but it does publish what is needed to recover them. Every smart-meter usage row names its charge (`Peak Usage`, `Offpeak Usage`, `Solar/Generation Feed in (4pm-11pm)`, `Super Export top up`, `ZeroHero`...) and the local time windows it applies to, and `CostDetail` returns the billed amount per day for each cost category. Each refresh rebuilds the plan's windows from the newest usage day, so a plan change is picked up automatically. Rates are then fitted per cost category by least squares across the complete days in the 31-day window, and snapped to the nearest 0.1 c/kWh, the precision retailers publish rates at (the unrounded fit is kept as `fitted_rate`).
 
 What can be recovered, and how well:
 
@@ -98,7 +98,7 @@ What can be recovered, and how well:
 | --- | --- | --- |
 | Usage rates per time-of-use period | Fit of daily `USAGE` cost against kWh in each window | Excellent where you use energy (standard error below 0.1 c/kWh); weak for a period you rarely import in, such as peak with a battery. Each rate carries a `confidence` and `standard_error_cents`. |
 | Feed-in rates per window | Fit of daily `SOLAR` credit against exports in each window | Excellent |
-| Super Export (capped add-on) | Credit / kWh on uncapped days; the cap from days where the credit stops growing | Rate to within 0.01 c; the 15 kWh cap is found once a day exceeds it |
+| Super Export (capped add-on) | Credit / kWh on uncapped days; the cap from days where the credit stops growing | Exact after snapping; the 15 kWh cap is found once a day exceeds it |
 | Daily supply charge | Median `SUPPLY` row | To the cent (the portal rounds each day) |
 | ZeroHero | Median credit; window from the usage rows | Credit exact. The import threshold defaults to GloBird's 0.03 kWh per hour; days achieved and missed are reported with the window imports seen |
 | Controlled load, free-usage allowance, critical peak events | Only if they appear in the data | Shown as `unobserved` until used |

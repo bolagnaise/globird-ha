@@ -41,6 +41,14 @@ _ROUNDING_VARIANCE = (0.01**2) / 12
 _HIGH_CONFIDENCE_SE = 0.002  # $/kWh (0.2 c)
 _MEDIUM_CONFIDENCE_SE = 0.01  # $/kWh (1 c)
 _FREE_RATE = 0.0005  # $/kWh below which a rate is reported as free
+# Retail rates are published to 0.1 c/kWh, so fitted rates are snapped to it.
+# The unrounded fit is kept as ``fitted_rate``.
+RATE_STEP = 0.001  # $/kWh
+
+
+def snap_rate(value: float) -> float:
+    """Round a fitted $/kWh rate to the nearest 0.1 c."""
+    return round(round(value / RATE_STEP) * RATE_STEP, 4)
 
 MINUTES_PER_DAY = 24 * 60
 
@@ -276,7 +284,8 @@ def _fit_category(
             rate = 0.0
         results[name].update(
             {
-                "rate": round(rate, 4),
+                "rate": snap_rate(rate),
+                "fitted_rate": round(rate, 5),
                 "standard_error": round(se, 4),
                 "confidence": _confidence(se),
                 "fit_days": len(days),
@@ -431,7 +440,8 @@ def _infer_capped_credit(
         if uncapped
         else seed
     )
-    info["rate"] = round(rate, 4)
+    info["rate"] = snap_rate(rate)
+    info["fitted_rate"] = round(rate, 5)
     info["confidence"] = "high" if len(uncapped) >= 3 else "medium"
     info["capped_days"] = len(capped)
     if capped:
