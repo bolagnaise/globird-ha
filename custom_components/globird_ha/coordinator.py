@@ -36,6 +36,7 @@ from .const import (
     DOMAIN,
     STORAGE_VERSION,
 )
+from .tariff import infer_tariff
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -44,6 +45,9 @@ def _is_expected_optional_fetch_failure(key: str, err: Exception) -> bool:
     """Return whether an optional endpoint failure is expected and non-critical."""
     message = str(err)
     if key == "service_status" and "Unable to get AccountServiceStatus" in message:
+        return True
+    # Product endpoints are only used for plan names; not every account has them.
+    if key in {"products", "product_histories"}:
         return True
     return False
 
@@ -278,6 +282,21 @@ class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     cache,
                     _errors=fetch_errors,
                 )
+                if primary_account_id is not None:
+                    data["products"] = await self._fetch_optional(
+                        "products",
+                        lambda: self.client.get_products(account_id=primary_account_id),
+                        cache,
+                        _errors=fetch_errors,
+                    )
+                    data["product_histories"] = await self._fetch_optional(
+                        "product_histories",
+                        lambda: self.client.get_product_histories(
+                            account_id=primary_account_id
+                        ),
+                        cache,
+                        _errors=fetch_errors,
+                    )
                 data["_fetch_errors"] = fetch_errors
             finally:
                 self.client.enable_reauth()
@@ -397,6 +416,12 @@ class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         usage_summary = build_usage_summary(usage) if not is_gas_service else {}
         gas_reading_summary = build_gas_reading_summary(usage) if is_gas_service else {}
         cost_summary = build_cost_summary(cost)
+        tariff = None
+        if not is_gas_service and is_smart:
+            try:
+                tariff = infer_tariff(usage, cost)
+            except Exception as err:  # noqa: BLE001 - never block refreshes.
+                _LOGGER.warning("GloBird tariff inference failed for %s: %s", sid, err)
 
         return {
             "service": service,
@@ -408,6 +433,7 @@ class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "gas_reading_summary": gas_reading_summary,
             "cost": cost,
             "cost_summary": cost_summary,
+            "tariff": tariff,
             "latest_data_status": build_latest_data_status(usage_summary, cost_summary),
             "weather": weather,
             "weather_summary": build_weather_summary(weather),
