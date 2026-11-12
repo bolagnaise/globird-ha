@@ -309,6 +309,15 @@ def select_meter_for_service(
     meters_payload: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
     """Select the best available meter row for a service."""
+    meters = select_meters_for_service(service, meters_payload)
+    return meters[0] if meters else None
+
+
+def select_meters_for_service(
+    service: dict[str, Any],
+    meters_payload: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Return all usable meter rows belonging to a service, best first."""
     raw = _payload_data(meters_payload)
 
     # API may return the list directly or wrapped in a nested dict
@@ -322,10 +331,10 @@ def select_meter_for_service(
                 meters = val
                 break
     else:
-        return None
+        return []
 
     if not meters:
-        return None
+        return []
 
     identifier = str(service.get("siteIdentifier") or "")
     if identifier:
@@ -338,16 +347,21 @@ def select_meter_for_service(
             meters = matched
         elif any(m.get("siteIdentifier") or m.get("nmi") for m in meters):
             # Do not attach another service's identified meter to this service.
-            return None
+            return []
 
-    return max(
-        enumerate(meters),
-        key=lambda item: (
-            _meter_status_rank(item[1]),
-            _meter_type_rank(item[1]),
-            -item[0],
-        ),
-    )[1]
+    usable = [meter for meter in meters if _meter_status_rank(meter) > 0]
+    candidates = usable or meters
+    return [
+        meter
+        for _, meter in sorted(
+            enumerate(candidates),
+            key=lambda item: (
+                -_meter_status_rank(item[1]),
+                -_meter_type_rank(item[1]),
+                item[0],
+            ),
+        )
+    ]
 
 
 def _build_register_summary(

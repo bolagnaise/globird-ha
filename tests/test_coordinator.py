@@ -258,6 +258,73 @@ def test_gas_service_fetches_its_own_meter_and_forces_basic_endpoint() -> None:
     assert result["meter"]["serialNumber"] == "gas-meter"
 
 
+def test_power_service_combines_usage_from_all_usable_meters() -> None:
+    """A TOU service must not discard usage because its first meter is empty."""
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.usage_calls: list[dict[str, Any]] = []
+
+        async def get_read_meters(self, *, account_service_id: int) -> dict[str, Any]:
+            return {
+                "data": [
+                    {
+                        "siteIdentifier": "NMI-POWER",
+                        "serialNumber": "off-peak",
+                        "meterReadType": "SMART",
+                        "serialStatus": "Energized",
+                    },
+                    {
+                        "siteIdentifier": "NMI-POWER",
+                        "serialNumber": "tou",
+                        "meterReadType": "SMART",
+                        "serialStatus": "Energized",
+                    },
+                ]
+            }
+
+        async def get_usage(self, **kwargs: Any) -> dict[str, Any]:
+            self.usage_calls.append(kwargs)
+            return {
+                "data": [
+                    {
+                        "readDate": "2026/11/11",
+                        "usage": 0 if kwargs["serial_number"] == "off-peak" else 4.2,
+                        "suffix": "E1",
+                        "serial": kwargs["serial_number"],
+                        "usageArray": [0, 0]
+                        if kwargs["serial_number"] == "off-peak"
+                        else [2.1, 2.1],
+                    }
+                ],
+                "success": True,
+            }
+
+        async def get_cost_detail(self, **_kwargs: Any) -> dict[str, Any]:
+            return {"data": [], "success": True}
+
+    instance = object.__new__(coordinator.GloBirdCoordinator)
+    instance.client = FakeClient()
+    result = asyncio.run(
+        instance._fetch_service_detail(
+            {
+                "accountServiceId": 11,
+                "siteIdentifier": "NMI-POWER",
+                "serviceType": "Power",
+            },
+            None,
+            None,
+            {},
+        )
+    )
+
+    assert [call["serial_number"] for call in instance.client.usage_calls] == [
+        "off-peak",
+        "tou",
+    ]
+    assert result["usage_summary"]["latest_day_usage"] == 4.2
+
+
 def test_expected_optional_fetch_failure_classification() -> None:
     """Known AccountServiceStatus endpoint failures should be treated as expected."""
     assert (

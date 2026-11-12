@@ -22,7 +22,7 @@ from .api import (
     build_usage_summary,
     build_weather_summary,
     extract_accounts_and_services,
-    select_meter_for_service,
+    select_meters_for_service,
     service_id,
 )
 from .const import (
@@ -345,28 +345,63 @@ class GloBirdCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         )
         if not isinstance(service_meters, dict):
             service_meters = meters_payload
-        meter = select_meter_for_service(service, service_meters)
+        meters = select_meters_for_service(service, service_meters)
+        meter = meters[0] if meters else None
         serial_number = meter.get("serialNumber") if meter else None
         meter_read_type = str(meter.get("meterReadType") or "" if meter else "")
         is_smart = not is_gas_service and meter_read_type.lower() != "basic"
 
         usage = None
-        if identifier and serial_number:
-            usage = await self._fetch_optional(
-                "usage",
-                lambda: self.client.get_usage(
-                    identifier=str(identifier),
-                    serial_number=str(serial_number),
-                    account_service_id=account_service_id,
-                    is_smart=is_smart,
-                    days=(
-                        DEFAULT_GAS_READING_DAYS
-                        if is_gas_service
-                        else DEFAULT_USAGE_DAYS
+        if identifier and meters:
+            usage_payloads: list[dict[str, Any]] = []
+            for usage_meter in meters:
+                usage_serial = usage_meter.get("serialNumber")
+                if not usage_serial:
+                    continue
+                usage_is_smart = (
+                    not is_gas_service
+                    and str(usage_meter.get("meterReadType") or "").lower()
+                    != "basic"
+                )
+                try:
+                    payload = await self.client.get_usage(
+                        identifier=str(identifier),
+                        serial_number=str(usage_serial),
+                        account_service_id=account_service_id,
+                        is_smart=usage_is_smart,
+                        days=(
+                            DEFAULT_GAS_READING_DAYS
+                            if is_gas_service
+                            else DEFAULT_USAGE_DAYS
+                        ),
+                    )
+                except Exception as err:  # noqa: BLE001 - optional portal endpoint.
+                    _LOGGER.warning(
+                        "GloBird optional fetch failed for usage meter %s: %s",
+                        usage_serial,
+                        err,
+                    )
+                    continue
+                if isinstance(payload, dict):
+                    usage_payloads.append(payload)
+
+            if usage_payloads:
+                rows = [
+                    row
+                    for payload in usage_payloads
+                    for row in (payload.get("data", []) or [])
+                    if isinstance(row, dict)
+                ]
+                usage = {
+                    "data": rows,
+                    "message": None,
+                    "success": all(
+                        payload.get("success", True) for payload in usage_payloads
                     ),
-                ),
-                cache,
-            )
+                }
+            else:
+                cached_usage = cache.get("usage")
+                usage = cached_usage if isinstance(cached_usage, dict) else None
 
         cost = None
         if identifier and account_service_id:

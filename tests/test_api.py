@@ -41,6 +41,7 @@ cost_attributes = api.cost_attributes
 extract_accounts_and_services = api.extract_accounts_and_services
 redact_sensitive = api.redact_sensitive
 select_meter_for_service = api.select_meter_for_service
+select_meters_for_service = api.select_meters_for_service
 usage_attributes = api.usage_attributes
 
 
@@ -369,6 +370,31 @@ def test_select_meter_preserves_order_for_equivalent_meters() -> None:
 
     assert selected is not None
     assert selected["serialNumber"] == "first"
+
+
+def test_select_meters_returns_all_usable_meters_for_service() -> None:
+    """Multi-meter services must retain every active meter for usage fetches."""
+    selected = select_meters_for_service(
+        {"siteIdentifier": "NMI-1"},
+        {
+            "data": [
+                {
+                    "siteIdentifier": "NMI-1",
+                    "meterReadType": "SMART",
+                    "serialNumber": "off-peak",
+                    "serialStatus": "Energized",
+                },
+                {
+                    "siteIdentifier": "NMI-1",
+                    "meterReadType": "SMART",
+                    "serialNumber": "tou",
+                    "serialStatus": "Energized",
+                },
+            ]
+        },
+    )
+
+    assert [meter["serialNumber"] for meter in selected] == ["off-peak", "tou"]
 
 
 def test_cost_summary_net_daily_is_sum_not_last_row() -> None:
