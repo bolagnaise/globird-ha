@@ -88,7 +88,45 @@ ZeroHero status reports the latest complete portal result as `achieved` or `miss
 
 Expected Monthly Cost projects the current billing period from completed daily net cost totals, using the latest invoice issue date as the billing-period start and a 30-day period. Billing Period Cost uses the same daily net totals so it matches the projection inputs. Billing Period Days uses Home Assistant's local date rather than the host process timezone.
 
-Pricing/rate-plan sensors are not currently exposed. The portal exposes product metadata, but not enough rate detail has been validated to provide EMHASS-ready import/export price sensors safely.
+## Rates and live pricing
+
+GloBird's portal does not publish plan rates through the endpoints this integration reads, but it does publish what is needed to recover them. Every smart-meter usage row names its charge (`Peak Usage`, `Offpeak Usage`, `Solar/Generation Feed in (4pm-11pm)`, `Super Export top up`, `ZeroHero`...) and the local time windows it applies to, and `CostDetail` returns the billed amount per day for each cost category. Each refresh rebuilds the plan's windows from the newest usage day, so a plan change is picked up automatically. Rates are then fitted per cost category by least squares across the complete days in the 31-day window, and snapped to the nearest 0.1 c/kWh, the precision retailers publish rates at (the unrounded fit is kept as `fitted_rate`).
+
+What can be recovered, and how well:
+
+| Charge | How | Accuracy |
+| --- | --- | --- |
+| Usage rates per time-of-use period | Fit of daily `USAGE` cost against kWh in each window | Excellent where you use energy (standard error below 0.1 c/kWh); weak for a period you rarely import in, such as peak with a battery. Each rate carries a `confidence` and `standard_error_cents`. |
+| Feed-in rates per window | Fit of daily `SOLAR` credit against exports in each window | Excellent |
+| Super Export (capped add-on) | Credit / kWh on uncapped days; the cap from days where the credit stops growing | Exact after snapping; the 15 kWh cap is found once a day exceeds it |
+| Daily supply charge | Median `SUPPLY` row | To the cent (the portal rounds each day) |
+| ZeroHero | Median credit; window from the usage rows | Credit exact. The import threshold defaults to GloBird's 0.03 kWh per hour; days achieved and missed are reported with the window imports seen |
+| Controlled load, free-usage allowance, critical peak events | Only if they appear in the data | Shown as `unobserved` until used |
+
+Rates you know can be pinned in the integration options under **Rate overrides**, using the charge names and cents the GloBird app shows on **Plan Details**, for example:
+
+```yaml
+Peak Usage: 47.3
+Shoulder Usage: 33
+Daily Charge: 147.4
+Super Export top up - Step1: 10
+Controlled Load: 29.7
+```
+
+Pinned values replace inferred ones; anything that does not match a charge is listed in `unmatched_overrides`.
+
+Electricity services get these sensors:
+
+- **Tariff Rates**: `portal_inferred` or `partly_overridden`, with every rate, window, confidence, the supply charge, Super Export and ZeroHero details as attributes, plus `plan_names` when the portal's product endpoints return them.
+- **Current Import Price** and **Current Export Price** (AUD/kWh): update at each window boundary, with a 24-hour, 30-minute `forecast` attribute (not recorded). The export price includes the Super Export top-up while its window is open and, when an export meter is configured, until the daily cap is used.
+
+If you set a **grid import** and/or **grid export** energy sensor in the options (any cumulative kWh sensor, such as an inverter's lifetime grid counters), the integration also tracks today live:
+
+- **Estimated Cost Today** (AUD): supply plus each window's import at its rate, minus feed-in, Super Export (capped) and the ZeroHero credit once earned, with a per-charge breakdown.
+- **ZeroHero Today**: `pending`, `on_track`, `earned` or `missed`, with the window import so far and the headroom left.
+- **Super Export Remaining Today** (kWh).
+
+Each meter reading is placed in the window at the midpoint of the interval it covers. Energy used while Home Assistant was down for more than 15 minutes cannot be placed in a window, so the tracker re-seeds and counts the gap in `restart_gaps`. A single grid meter cannot separate controlled load, so it is priced as general usage.
 
 ## Notes
 
