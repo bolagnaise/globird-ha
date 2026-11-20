@@ -96,6 +96,12 @@ def test_next_ready_poll_interval_targets_configured_daily_start() -> None:
     ) == timedelta(hours=16, minutes=30)
 
 
+def test_parses_time_selector_hh_mm_ss_format() -> None:
+    """HA's TimeSelector submits values as HH:MM:SS, which must parse correctly."""
+    assert coordinator._parse_daily_poll_start_time("05:00:00").isoformat() == "05:00:00"
+    assert coordinator._parse_daily_poll_start_time("23:45:12").isoformat() == "23:45:00"
+
+
 def test_invalid_daily_poll_start_time_falls_back_to_default() -> None:
     """Invalid stored options should keep the midnight-plus-default behavior."""
     now = datetime(2026, 6, 29, 10, 30, tzinfo=timezone.utc)

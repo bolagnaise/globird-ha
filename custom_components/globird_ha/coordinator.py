@@ -52,12 +52,13 @@ def _parse_daily_poll_start_time(value: Any) -> dt_time:
     """Return a configured local daily polling start time."""
     raw = str(value or DEFAULT_DAILY_POLL_START_TIME).strip()
     try:
-        hour_raw, minute_raw = raw.split(":", 1)
-        hour = int(hour_raw)
-        minute = int(minute_raw)
+        # HA's TimeSelector submits "HH:MM:SS"; older configs may use "HH:MM".
+        parts = raw.split(":")
+        hour = int(parts[0])
+        minute = int(parts[1])
         if 0 <= hour <= 23 and 0 <= minute <= 59:
             return dt_time(hour=hour, minute=minute)
-    except (TypeError, ValueError):
+    except (IndexError, TypeError, ValueError):
         pass
     return dt_time(hour=0, minute=5)
 
