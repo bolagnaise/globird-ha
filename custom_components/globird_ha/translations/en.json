@@ -24,9 +24,10 @@
     "step": {
       "init": {
         "title": "GloBird HA options",
-        "description": "Set when automatic daily readiness polling resumes after the previous day is ready.",
+        "description": "Set when automatic daily readiness polling resumes after the previous day is ready. Electricity statistics import the cached interval history for the Energy Dashboard.",
         "data": {
-          "daily_poll_start_time": "Daily polling start time"
+          "daily_poll_start_time": "Daily polling start time",
+          "import_electricity_statistics": "Import electricity statistics"
         }
       }
     }

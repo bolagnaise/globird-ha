@@ -9,7 +9,9 @@ DOMAIN = "globird_ha"
 CONF_EMAIL = "email"
 CONF_PASSWORD = "password"
 CONF_DAILY_POLL_START_TIME = "daily_poll_start_time"
+CONF_IMPORT_ELECTRICITY_STATISTICS = "import_electricity_statistics"
 DEFAULT_DAILY_POLL_START_TIME = "00:05"
+DEFAULT_IMPORT_ELECTRICITY_STATISTICS = True
 
 BASE_URL = "https://myaccount.globirdenergy.com.au"
 

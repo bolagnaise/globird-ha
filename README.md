@@ -71,13 +71,10 @@ Service-level sensors include:
 
 `Latest Day Usage` is a daily total returned by the GloBird portal, not a live
 intraday meter. GloBird usage data normally trails by at least one day and the
-entity only changes when a newer portal result is available. It can therefore
-be selected for grid consumption if you want the available portal history, but
-the current-day graph may contain only one point (or no point yet). This is
-expected and does not indicate that the integration was added under the wrong
-Home Assistant section. Use a live cumulative meter entity from your meter or
-another integration when the Energy dashboard needs current-day/intraday
-coverage.
+entity only changes when a newer portal result is available. Electricity grid
+history comes from the imported statistics described below, not from that
+sensor. Use a live cumulative meter entity from your meter or another
+integration when the Energy dashboard needs current-day coverage.
 
 Gas service-level sensors include:
 
@@ -89,6 +86,18 @@ Gas service-level sensors include:
 Recorder-safe daily summaries, the latest interval array, compact usage register totals, cost category totals, daily net cost totals, and incomplete cost days are exposed as sensor attributes. Daily usage and cost attributes keep the most recent rows and include count/truncation flags; full cached snapshots are available through Home Assistant diagnostics with sensitive fields redacted.
 
 For gas services, historical basic-meter readings are also imported into Home Assistant recorder long-term statistics so historical charts can be populated from existing portal read history. Meter replacements and corrected lower reads are handled without losing subsequent consumption.
+
+Electricity interval history is imported the same way, without extra portal requests. Each refresh turns the cached half-hour readings into hourly external statistics:
+
+- **GloBird Grid import** is general import plus controlled load.
+- **GloBird General import** is the general register, usually E1.
+- **GloBird Controlled load** is controlled load, usually E2, and is omitted when the service has none.
+
+Statistic IDs are scoped to the config entry and electricity service, with `globird_ha` as the source. A second electricity service is labelled `(2)`.
+
+In **Settings > Dashboards > Energy > Electricity grid**, add either the grid-import statistic or the separate general and controlled statistics. Adding the combined statistic together with its components counts the same electricity twice. The existing usage sensors are rolling portal totals, so they are not the Energy Dashboard source.
+
+The portal cache is about 31 days. A corrected day still inside that cache updates the affected hours and every later cumulative sum. A correction older than the cache is not visible and is left unchanged. The current local day is not imported. Importing can be turned off from the integration options; existing statistics are left in place.
 
 ## Updates and data freshness
 
