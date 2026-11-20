@@ -75,7 +75,7 @@ class Recorder:
         self.queries.append((start, end, period, units, set(types), set(statistic_ids)))
         statistic_id = next(iter(statistic_ids))
         rows = [
-            {"start": stamp, "sum": total}
+            {"start": stamp.timestamp(), "sum": total}
             for stamp, total in sorted(self.rows.get(statistic_id, {}).items())
             if start <= stamp < end
         ]
@@ -217,6 +217,44 @@ def test_import_uses_2026_11_recorder_api_and_is_idempotent() -> None:
     assert any(end == window_start and start == window_start - timedelta(days=400) for start, end, *_rest in RECORDER.queries)
     totals = [max(rows.values()) for rows in RECORDER.rows.values()]
     assert totals == [48.0, 48.0]
+
+
+def test_timestamp_rows_allow_a_later_day_to_be_imported() -> None:
+    """A refresh after the first import must extend the stored hours.
+
+    The recorder returns ``start`` as a Unix timestamp. Treating that value as
+    a datetime previously aborted the import, so days after the first run were
+    never written.
+    """
+    _use_recorder_stub()
+    RECORDER.rows.clear()
+    RECORDER.metadata.clear()
+    RECORDER.fail_ids_containing = ""
+    hass = Hass()
+    entry = types.SimpleNamespace(entry_id="entry-1", options={})
+
+    asyncio.run(
+        electricity_import.async_import_coordinator_data(hass, entry, _payload("power"))
+    )
+    extended = _payload("power")
+    extended["service_data"]["power"]["usage"]["data"].append(
+        {
+            "readDate": "2026/11/02",
+            "suffix": "E1",
+            "chargeCategoryCode": "USAGE",
+            "chargeType": "Peak Usage",
+            "minQualityMethod": "A",
+            "serial": "meter",
+            "usageArray": [1.0] * 48,
+        }
+    )
+    asyncio.run(
+        electricity_import.async_import_coordinator_data(hass, entry, extended)
+    )
+
+    assert len(RECORDER.metadata) == 4
+    totals = sorted(max(rows.values()) for rows in RECORDER.rows.values())
+    assert totals == [96.0, 96.0]
 
 
 def test_one_failing_service_does_not_block_another_or_require_gas() -> None:

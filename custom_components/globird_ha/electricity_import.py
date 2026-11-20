@@ -187,14 +187,28 @@ async def _async_read_sums(
     rows = result.get(statistic_id, [])
     points: list[tuple[datetime, float]] = []
     for row in rows:
-        start_at = row["start"]
-        if start_at.tzinfo is None:
-            start_at = start_at.replace(tzinfo=timezone.utc)
         total = row.get("sum")
         if total is None:
             continue
-        points.append((start_at.astimezone(timezone.utc), float(total)))
+        points.append((_statistic_start(row["start"]), float(total)))
     return points
+
+
+def _statistic_start(value: Any) -> datetime:
+    """Return an aware UTC hour start from a recorder statistics row.
+
+    Home Assistant 2026.11 returns ``start`` as a Unix timestamp in seconds.
+    A datetime is accepted as well so older rows and tests still match.
+    """
+    if isinstance(value, datetime):
+        start_at = value
+    elif isinstance(value, (int, float)):
+        start_at = datetime.fromtimestamp(value, timezone.utc)
+    else:
+        raise TypeError(f"Unsupported statistic start: {type(value).__name__}")
+    if start_at.tzinfo is None:
+        start_at = start_at.replace(tzinfo=timezone.utc)
+    return start_at.astimezone(timezone.utc)
 
 
 def _write_statistics(
