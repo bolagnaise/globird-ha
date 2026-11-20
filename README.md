@@ -71,13 +71,10 @@ Service-level sensors include:
 
 `Latest Day Usage` is a daily total returned by the GloBird portal, not a live
 intraday meter. GloBird usage data normally trails by at least one day and the
-entity only changes when a newer portal result is available. It can therefore
-be selected for grid consumption if you want the available portal history, but
-the current-day graph may contain only one point (or no point yet). This is
-expected and does not indicate that the integration was added under the wrong
-Home Assistant section. Use a live cumulative meter entity from your meter or
-another integration when the Energy dashboard needs current-day/intraday
-coverage.
+entity only changes when a newer portal result is available. Electricity grid
+history comes from the imported statistics described below, not from that
+sensor. Use a live cumulative meter entity from your meter or another
+integration when the Energy dashboard needs current-day coverage.
 
 Gas service-level sensors include:
 
