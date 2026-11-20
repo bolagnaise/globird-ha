@@ -35,8 +35,21 @@ from .api import (
 )
 from .const import DOMAIN
 from .coordinator import GloBirdCoordinator
+from .live import GloBirdLiveTariff
+from .tariff import (
+    describe_windows,
+    export_component_at,
+    export_price_at,
+    import_component_at,
+    import_price_at,
+    next_boundary,
+    price_forecast,
+    super_export_active,
+)
 
 CURRENCY_AUD = "AUD"
+PRICE_UNIT = f"{CURRENCY_AUD}/kWh"
+ZEROHERO_TODAY_OPTIONS = ("pending", "on_track", "earned", "missed")
 _LOGGER = logging.getLogger(__name__)
 ZEROHERO_STATUS_OPTIONS = (
     "achieved",
@@ -413,6 +426,7 @@ async def async_setup_entry(
     for account in data.get("accounts", []):
         entities.append(GloBirdAccountSummarySensor(coordinator, config_entry, account))
 
+    live_meters_assigned = False
     for service in data.get("services", []):
         service_entities: list[SensorEntity] = [
             GloBirdServiceStatusSensor(coordinator, config_entry, service),
@@ -456,6 +470,49 @@ async def async_setup_entry(
                     GloBirdWeatherSummarySensor(coordinator, config_entry, service),
                 ]
             )
+            runtime = GloBirdLiveTariff(
+                hass, coordinator, config_entry, service_id(service)
+            )
+            if live_meters_assigned:
+                # Grid meters describe one site; attach them to the first
+                # electricity service only.
+                runtime.import_entity = None
+                runtime.export_entity = None
+            live_meters_assigned = True
+            await runtime.async_start()
+            config_entry.async_on_unload(
+                lambda runtime=runtime: runtime.async_stop()
+            )
+            service_entities.extend(
+                [
+                    GloBirdTariffRatesSensor(
+                        coordinator, config_entry, service, runtime
+                    ),
+                    GloBirdImportPriceSensor(
+                        coordinator, config_entry, service, runtime
+                    ),
+                    GloBirdExportPriceSensor(
+                        coordinator, config_entry, service, runtime
+                    ),
+                ]
+            )
+            if runtime.tracks_import:
+                service_entities.extend(
+                    [
+                        GloBirdEstimatedCostTodaySensor(
+                            coordinator, config_entry, service, runtime
+                        ),
+                        GloBirdZeroHeroTodaySensor(
+                            coordinator, config_entry, service, runtime
+                        ),
+                    ]
+                )
+            if runtime.tracks_export:
+                service_entities.append(
+                    GloBirdSuperExportRemainingSensor(
+                        coordinator, config_entry, service, runtime
+                    )
+                )
 
         entities.extend(service_entities)
 
@@ -1270,3 +1327,344 @@ class GloBirdWeatherSummarySensor(GloBirdServiceBaseSensor):
             }
         )
         return attrs
+
+
+def _cents(value: Any) -> float | None:
+    return round(value * 100, 3) if isinstance(value, (int, float)) else None
+
+
+def _plan_names(data: dict[str, Any]) -> list[str]:
+    """Return current plan names from the portal's product endpoints, if any."""
+    names: list[str] = []
+    for key in ("products", "product_histories"):
+        rows = _payload_data(data.get(key))
+        if isinstance(rows, dict):
+            rows = [rows]
+        for row in rows if isinstance(rows, list) else []:
+            if not isinstance(row, dict) or row.get("endDate"):
+                continue
+            for field in ("productName", "planName", "offerName", "name"):
+                value = row.get(field)
+                if isinstance(value, str) and value.strip():
+                    if value.strip() not in names:
+                        names.append(value.strip())
+                    break
+    return names
+
+
+class GloBirdLiveServiceSensor(GloBirdServiceBaseSensor):
+    """Service sensor that also refreshes on live tariff events."""
+
+    def __init__(
+        self,
+        coordinator: GloBirdCoordinator,
+        config_entry: ConfigEntry,
+        service: dict[str, Any],
+        runtime: GloBirdLiveTariff,
+    ) -> None:
+        """Initialize the sensor."""
+        super().__init__(coordinator, config_entry, service)
+        self._runtime = runtime
+
+    async def async_added_to_hass(self) -> None:
+        """Subscribe to price boundaries and meter updates."""
+        await super().async_added_to_hass()
+        self.async_on_remove(self._runtime.add_listener(self._handle_live_update))
+
+    @callback
+    def _handle_live_update(self) -> None:
+        self.async_write_ha_state()
+
+    @property
+    def available(self) -> bool:
+        """Return whether a tariff is available."""
+        return self._runtime.tariff is not None
+
+
+class GloBirdTariffRatesSensor(GloBirdLiveServiceSensor):
+    """The plan's rates, inferred from the portal and optionally pinned."""
+
+    sensor_key = "tariff_rates"
+    sensor_name = "Tariff Rates"
+    icon = "mdi:cash-clock"
+    device_class = SensorDeviceClass.ENUM
+    _attr_options = ["portal_inferred", "partly_overridden"]
+
+    @property
+    def available(self) -> bool:
+        """Stay available so the attributes can explain a missing tariff."""
+        return True
+
+    @property
+    def native_value(self) -> Any:
+        """Return where the rates came from."""
+        tariff = self._runtime.tariff
+        if tariff is None:
+            return None
+        sources = [c.get("source") for c in tariff["components"]]
+        sources += [
+            (tariff.get(key) or {}).get("source")
+            for key in ("supply", "super_export", "zerohero")
+        ]
+        return "partly_overridden" if "override" in sources else "portal_inferred"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return the full tariff."""
+        tariff = self._runtime.tariff
+        if tariff is None:
+            return {"reason": "No smart-meter usage and cost history yet."}
+        rates = []
+        for component in tariff["components"]:
+            if component["category"] in {"ADDON_FEED_IN", "LOW_USAGE_REWARD_PER_DAY"}:
+                continue
+            rates.append(
+                {
+                    "name": component["name"],
+                    "direction": component["direction"],
+                    "rate": component.get("rate"),
+                    "rate_cents": _cents(component.get("rate")),
+                    "confidence": component.get("confidence"),
+                    "standard_error_cents": _cents(component.get("standard_error")),
+                    "source": component.get("source"),
+                    "windows": describe_windows(component["windows"]),
+                    "observed_kwh": component.get("observed_kwh"),
+                    "max_daily_kwh": component.get("max_daily_kwh"),
+                }
+            )
+        supply = tariff.get("supply") or {}
+        super_export = tariff.get("super_export") or {}
+        zerohero = tariff.get("zerohero") or {}
+        return {
+            "plan_names": _plan_names(self.coordinator.data or {}),
+            "rates": rates,
+            "daily_supply_charge": supply.get("rate"),
+            "daily_supply_charge_source": supply.get("source"),
+            "super_export": (
+                {
+                    "name": super_export.get("name"),
+                    "rate": super_export.get("rate"),
+                    "cap_kwh": super_export.get("cap_kwh"),
+                    "rate_after_cap": super_export.get("rate_after_cap", 0.0),
+                    "windows": describe_windows(super_export.get("windows") or []),
+                    "capped_days": super_export.get("capped_days"),
+                    "source": super_export.get("source"),
+                }
+                if super_export
+                else None
+            ),
+            "zerohero": (
+                {
+                    "name": zerohero.get("name"),
+                    "credit": zerohero.get("credit"),
+                    "threshold_kwh": zerohero.get("threshold_kwh"),
+                    "windows": describe_windows(zerohero.get("windows") or []),
+                    "achieved_days": zerohero.get("achieved_days"),
+                    "missed_days": zerohero.get("missed_days"),
+                    "max_window_import_kwh_achieved": zerohero.get(
+                        "max_window_import_kwh_achieved"
+                    ),
+                    "min_window_import_kwh_missed": zerohero.get(
+                        "min_window_import_kwh_missed"
+                    ),
+                    "source": zerohero.get("source"),
+                }
+                if zerohero
+                else None
+            ),
+            "fit_days": tariff.get("fit_days"),
+            "structure_day": tariff.get("structure_day"),
+            "unmodelled_categories": tariff.get("unmodelled_categories"),
+            "unmatched_overrides": tariff.get("unmatched_overrides"),
+        }
+
+
+class GloBirdImportPriceSensor(GloBirdLiveServiceSensor):
+    """Current marginal import price."""
+
+    sensor_key = "import_price"
+    sensor_name = "Current Import Price"
+    icon = "mdi:transmission-tower-import"
+    native_unit_of_measurement = PRICE_UNIT
+    _unrecorded_attributes = frozenset({"forecast"})
+
+    @property
+    def native_value(self) -> Any:
+        """Return the import price in AUD/kWh."""
+        tariff = self._runtime.tariff
+        return import_price_at(tariff, dt_util.now()) if tariff else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return the active period and a 24-hour forecast."""
+        tariff = self._runtime.tariff
+        if tariff is None:
+            return {}
+        now = dt_util.now()
+        component = import_component_at(tariff, now) or {}
+        return {
+            "period": component.get("name"),
+            "confidence": component.get("confidence"),
+            "source": component.get("source"),
+            "next_change": next_boundary(tariff, now).isoformat(),
+            "forecast": [
+                {"start": slot["start"], "price": slot["import"]}
+                for slot in price_forecast(tariff, now)
+            ],
+        }
+
+
+class GloBirdExportPriceSensor(GloBirdLiveServiceSensor):
+    """Current marginal export (feed-in) price, including Super Export."""
+
+    sensor_key = "export_price"
+    sensor_name = "Current Export Price"
+    icon = "mdi:transmission-tower-export"
+    native_unit_of_measurement = PRICE_UNIT
+    _unrecorded_attributes = frozenset({"forecast"})
+
+    def _used(self) -> float | None:
+        if not self._runtime.tracks_export:
+            return None
+        return self._runtime.tracker.super_export_kwh
+
+    @property
+    def native_value(self) -> Any:
+        """Return the export price in AUD/kWh."""
+        tariff = self._runtime.tariff
+        if tariff is None:
+            return None
+        return export_price_at(tariff, dt_util.now(), self._used())
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return the active period, Super Export state and a forecast."""
+        tariff = self._runtime.tariff
+        if tariff is None:
+            return {}
+        now = dt_util.now()
+        component = export_component_at(tariff, now) or {}
+        return {
+            "period": component.get("name"),
+            "confidence": component.get("confidence"),
+            "source": component.get("source"),
+            "super_export_active": super_export_active(tariff, now),
+            "super_export_cap_tracked": self._runtime.tracks_export,
+            "super_export_remaining_kwh": (
+                self._runtime.tracker.super_export_remaining(tariff)
+                if self._runtime.tracks_export
+                else None
+            ),
+            "next_change": next_boundary(tariff, now).isoformat(),
+            "forecast": [
+                {"start": slot["start"], "price": slot["export"]}
+                for slot in price_forecast(tariff, now)
+            ],
+        }
+
+
+class GloBirdEstimatedCostTodaySensor(GloBirdLiveServiceSensor):
+    """Today's cost estimated from live grid meters and the tariff."""
+
+    sensor_key = "estimated_cost_today"
+    sensor_name = "Estimated Cost Today"
+    icon = "mdi:cash-fast"
+    native_unit_of_measurement = CURRENCY_AUD
+    device_class = SensorDeviceClass.MONETARY
+    _unrecorded_attributes = frozenset(
+        {"lines", "import_kwh", "export_kwh", "missing_rates"}
+    )
+
+    @property
+    def native_value(self) -> Any:
+        """Return today's estimated net cost (negative is a credit)."""
+        tariff = self._runtime.tariff
+        if tariff is None:
+            return None
+        return self._runtime.tracker.cost(tariff, dt_util.now())["total"]
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return the cost breakdown."""
+        tariff = self._runtime.tariff
+        if tariff is None:
+            return {}
+        estimate = self._runtime.tracker.cost(tariff, dt_util.now())
+        estimate.pop("total", None)
+        estimate.update(
+            {
+                "day": self._runtime.tracker.day,
+                "grid_import_entity": self._runtime.import_entity,
+                "grid_export_entity": self._runtime.export_entity,
+                "restart_gaps": self._runtime.reading_gaps,
+            }
+        )
+        return estimate
+
+
+class GloBirdZeroHeroTodaySensor(GloBirdLiveServiceSensor):
+    """Live ZEROHERO progress for today from the grid import meter."""
+
+    sensor_key = "zerohero_today"
+    sensor_name = "ZeroHero Today"
+    icon = "mdi:check-decagram-outline"
+    device_class = SensorDeviceClass.ENUM
+    _attr_options = list(ZEROHERO_TODAY_OPTIONS)
+
+    @property
+    def native_value(self) -> Any:
+        """Return pending, on_track, earned or missed."""
+        tariff = self._runtime.tariff
+        if tariff is None:
+            return None
+        return self._runtime.tracker.zerohero_state(tariff, dt_util.now())
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return window import against the threshold."""
+        tariff = self._runtime.tariff
+        zerohero = (tariff or {}).get("zerohero") or {}
+        imported = self._runtime.tracker.zerohero_import_kwh
+        threshold = zerohero.get("threshold_kwh")
+        return {
+            "window_import_kwh": round(imported, 4),
+            "threshold_kwh": threshold,
+            "headroom_kwh": (
+                round(max(0.0, threshold - imported), 4)
+                if threshold is not None
+                else None
+            ),
+            "windows": describe_windows(zerohero.get("windows") or []),
+            "credit": zerohero.get("credit"),
+        }
+
+
+class GloBirdSuperExportRemainingSensor(GloBirdLiveServiceSensor):
+    """kWh left today at the Super Export rate."""
+
+    sensor_key = "super_export_remaining"
+    sensor_name = "Super Export Remaining Today"
+    icon = "mdi:solar-power-variant"
+    native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
+    device_class = SensorDeviceClass.ENERGY
+    state_class = SensorStateClass.MEASUREMENT
+
+    @property
+    def native_value(self) -> Any:
+        """Return remaining Super Export kWh for today."""
+        tariff = self._runtime.tariff
+        if tariff is None:
+            return None
+        return self._runtime.tracker.super_export_remaining(tariff)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return today's Super Export window exports."""
+        tariff = self._runtime.tariff
+        info = (tariff or {}).get("super_export") or {}
+        return {
+            "exported_in_window_kwh": round(self._runtime.tracker.super_export_kwh, 3),
+            "cap_kwh": info.get("cap_kwh"),
+            "rate": info.get("rate"),
+            "windows": describe_windows(info.get("windows") or []),
+        }

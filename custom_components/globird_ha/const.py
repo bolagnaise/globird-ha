@@ -10,6 +10,11 @@ CONF_EMAIL = "email"
 CONF_PASSWORD = "password"
 CONF_DAILY_POLL_START_TIME = "daily_poll_start_time"
 DEFAULT_DAILY_POLL_START_TIME = "00:05"
+CONF_RATE_OVERRIDES = "rate_overrides"
+CONF_SUPER_EXPORT_CAP_KWH = "super_export_cap_kwh"
+CONF_ZEROHERO_KWH_PER_HOUR = "zerohero_kwh_per_hour"
+CONF_GRID_IMPORT_ENTITY = "grid_import_entity"
+CONF_GRID_EXPORT_ENTITY = "grid_export_entity"
 
 BASE_URL = "https://myaccount.globirdenergy.com.au"
 

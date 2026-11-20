@@ -24,11 +24,27 @@
     "step": {
       "init": {
         "title": "GloBird HA options",
-        "description": "Set when automatic daily readiness polling resumes after the previous day is ready.",
+        "description": "Polling, live grid meters and plan rates. Rates are inferred from your GloBird usage and cost history; pin any you know from the GloBird app (Plan Details).",
         "data": {
-          "daily_poll_start_time": "Daily polling start time"
+          "daily_poll_start_time": "Daily polling start time",
+          "grid_import_entity": "Grid import energy sensor",
+          "grid_export_entity": "Grid export energy sensor",
+          "rate_overrides": "Rate overrides (cents)",
+          "super_export_cap_kwh": "Super Export daily cap",
+          "zerohero_kwh_per_hour": "ZeroHero import limit per hour"
+        },
+        "data_description": {
+          "daily_poll_start_time": "When automatic daily readiness polling resumes after the previous day is ready.",
+          "grid_import_entity": "Optional cumulative kWh sensor for energy bought from the grid. Enables Estimated Cost Today and ZeroHero Today.",
+          "grid_export_entity": "Optional cumulative kWh sensor for energy sent to the grid. Enables Super Export Remaining Today and caps the export price.",
+          "rate_overrides": "Optional. Charge names as the GloBird app shows them, in cents, e.g. Peak Usage: 47.3, Daily Charge: 147.4, Super Export top up - Step1: 10.",
+          "super_export_cap_kwh": "Optional. Overrides the inferred daily kWh limit for the Super Export credit.",
+          "zerohero_kwh_per_hour": "Optional. Defaults to 0.03 kWh per hour across the ZeroHero window."
         }
       }
+    },
+    "error": {
+      "invalid_rate_overrides": "Rate overrides must map charge names to numbers in cents."
     }
   },
   "entity": {

@@ -13,7 +13,12 @@ from .api import GloBirdAuthError, GloBirdCaptchaRequired, GloBirdClient
 from .const import (
     CONF_DAILY_POLL_START_TIME,
     CONF_EMAIL,
+    CONF_GRID_EXPORT_ENTITY,
+    CONF_GRID_IMPORT_ENTITY,
     CONF_PASSWORD,
+    CONF_RATE_OVERRIDES,
+    CONF_SUPER_EXPORT_CAP_KWH,
+    CONF_ZEROHERO_KWH_PER_HOUR,
     DEFAULT_DAILY_POLL_START_TIME,
     DOMAIN,
 )
@@ -90,13 +95,39 @@ class GloBirdOptionsFlow(config_entries.OptionsFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Manage integration options."""
+        errors: dict[str, str] = {}
         if user_input is not None:
-            return self.async_create_entry(title="", data=user_input)
+            overrides = user_input.get(CONF_RATE_OVERRIDES)
+            if overrides in (None, "", {}):
+                user_input.pop(CONF_RATE_OVERRIDES, None)
+            elif not _valid_overrides(overrides):
+                errors[CONF_RATE_OVERRIDES] = "invalid_rate_overrides"
+            if not errors:
+                return self.async_create_entry(title="", data=user_input)
 
-        current_time = self.config_entry.options.get(
+        options = dict(self.config_entry.options)
+        if user_input is not None:
+            options.update(user_input)
+        current_time = options.get(
             CONF_DAILY_POLL_START_TIME,
             DEFAULT_DAILY_POLL_START_TIME,
         )
+        energy_sensor = selector.EntitySelector(
+            selector.EntitySelectorConfig(domain="sensor", device_class="energy")
+        )
+        kwh_box = selector.NumberSelector(
+            selector.NumberSelectorConfig(
+                min=0,
+                max=1000,
+                step="any",
+                mode=selector.NumberSelectorMode.BOX,
+                unit_of_measurement="kWh",
+            )
+        )
+
+        def _suggested(key: str) -> dict[str, Any]:
+            value = options.get(key)
+            return {"suggested_value": value} if value not in (None, "") else {}
 
         return self.async_show_form(
             step_id="init",
@@ -106,6 +137,41 @@ class GloBirdOptionsFlow(config_entries.OptionsFlow):
                         CONF_DAILY_POLL_START_TIME,
                         default=current_time,
                     ): selector.TimeSelector(),
+                    vol.Optional(
+                        CONF_GRID_IMPORT_ENTITY,
+                        description=_suggested(CONF_GRID_IMPORT_ENTITY),
+                    ): energy_sensor,
+                    vol.Optional(
+                        CONF_GRID_EXPORT_ENTITY,
+                        description=_suggested(CONF_GRID_EXPORT_ENTITY),
+                    ): energy_sensor,
+                    vol.Optional(
+                        CONF_RATE_OVERRIDES,
+                        description=_suggested(CONF_RATE_OVERRIDES),
+                    ): selector.ObjectSelector(),
+                    vol.Optional(
+                        CONF_SUPER_EXPORT_CAP_KWH,
+                        description=_suggested(CONF_SUPER_EXPORT_CAP_KWH),
+                    ): kwh_box,
+                    vol.Optional(
+                        CONF_ZEROHERO_KWH_PER_HOUR,
+                        description=_suggested(CONF_ZEROHERO_KWH_PER_HOUR),
+                    ): kwh_box,
                 }
             ),
+            errors=errors,
         )
+
+
+def _valid_overrides(value: Any) -> bool:
+    """Return whether rate overrides are a mapping of names to numbers (cents)."""
+    if not isinstance(value, dict):
+        return False
+    for key, rate in value.items():
+        if not str(key).strip() or isinstance(rate, bool):
+            return False
+        try:
+            float(rate)
+        except (TypeError, ValueError):
+            return False
+    return True

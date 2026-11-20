@@ -45,6 +45,26 @@ class Required:
         return hash((self.key, self.default))
 
 
+class Optional(Required):
+    """Minimal optional field marker."""
+
+    def __init__(
+        self,
+        key: str,
+        default: Any | None = None,
+        description: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(key, default)
+        self.description = description or {}
+
+
+class _AnySelector:
+    """Minimal selector accepting any config."""
+
+    def __init__(self, _config: Any = None) -> None:
+        return None
+
+
 class ConfigFlow:
     """Minimal stand-in for Home Assistant's config flow base."""
 
@@ -97,11 +117,18 @@ config_entries.ConfigFlow = ConfigFlow
 config_entries.OptionsFlow = OptionsFlow
 data_entry_flow.FlowResult = dict[str, Any]
 voluptuous.Required = Required
+voluptuous.Optional = Optional
 voluptuous.Schema = Schema
 selector.TextSelector = TextSelector
 selector.TextSelectorConfig = lambda **kwargs: kwargs
 selector.TextSelectorType = types.SimpleNamespace(PASSWORD="password")
 selector.TimeSelector = TimeSelector
+selector.EntitySelector = _AnySelector
+selector.EntitySelectorConfig = lambda **kwargs: kwargs
+selector.NumberSelector = _AnySelector
+selector.NumberSelectorConfig = lambda **kwargs: kwargs
+selector.NumberSelectorMode = types.SimpleNamespace(BOX="box")
+selector.ObjectSelector = _AnySelector
 helpers.selector = selector
 homeassistant.config_entries = config_entries
 homeassistant.data_entry_flow = data_entry_flow
@@ -148,3 +175,67 @@ def test_options_flow_saves_daily_poll_start_time() -> None:
         "title": "",
         "data": {"daily_poll_start_time": "03:00"},
     }
+
+
+def test_options_flow_shows_tariff_fields() -> None:
+    """Options should offer live meters, rate overrides and plan limits."""
+    flow = config_flow.GloBirdOptionsFlow()
+    flow.config_entry = ConfigEntry()
+
+    result = asyncio.run(flow.async_step_init())
+    fields = str(result["data_schema"])
+
+    for key in (
+        "grid_import_entity",
+        "grid_export_entity",
+        "rate_overrides",
+        "super_export_cap_kwh",
+        "zerohero_kwh_per_hour",
+    ):
+        assert key in fields
+
+
+def test_options_flow_saves_rate_overrides_in_cents() -> None:
+    """Rate overrides keyed by the GloBird app's charge names are stored as given."""
+    flow = config_flow.GloBirdOptionsFlow()
+    flow.config_entry = ConfigEntry()
+    submitted = {
+        "daily_poll_start_time": "00:05",
+        "rate_overrides": {"Peak Usage": 47.3, "Daily Charge": 147.4},
+        "grid_import_entity": "sensor.grid_import",
+    }
+
+    result = asyncio.run(flow.async_step_init(dict(submitted)))
+
+    assert result["type"] == "create_entry"
+    assert result["data"] == submitted
+
+
+def test_options_flow_rejects_non_numeric_rate_overrides() -> None:
+    """A rate override that is not a number is reported against the field."""
+    flow = config_flow.GloBirdOptionsFlow()
+    flow.config_entry = ConfigEntry()
+
+    result = asyncio.run(
+        flow.async_step_init(
+            {
+                "daily_poll_start_time": "00:05",
+                "rate_overrides": {"Peak Usage": "about 47"},
+            }
+        )
+    )
+
+    assert result["type"] == "form"
+    assert result["errors"] == {"rate_overrides": "invalid_rate_overrides"}
+
+
+def test_options_flow_drops_empty_rate_overrides() -> None:
+    """Clearing the overrides editor removes the option."""
+    flow = config_flow.GloBirdOptionsFlow()
+    flow.config_entry = ConfigEntry()
+
+    result = asyncio.run(
+        flow.async_step_init({"daily_poll_start_time": "00:05", "rate_overrides": {}})
+    )
+
+    assert result["data"] == {"daily_poll_start_time": "00:05"}

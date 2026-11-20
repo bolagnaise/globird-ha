@@ -1182,6 +1182,19 @@ class GloBirdClient:
             path = f"{path}?accountId={account_id}"
         return await self._request_json("GET", path)
 
+    async def get_products(self, *, account_id: int | str) -> dict[str, Any]:
+        """Fetch the products (plans) attached to an account."""
+        return await self._request_json(
+            "GET", f"/api/account/getProductsByAccountId?accountId={account_id}"
+        )
+
+    async def get_product_histories(self, *, account_id: int | str) -> dict[str, Any]:
+        """Fetch the product (plan) history for an account."""
+        return await self._request_json(
+            "GET",
+            f"/api/account/getAllProductHistoriesByAccountId?accountId={account_id}",
+        )
+
     async def get_account_service_status(self) -> dict[str, Any]:
         """Fetch account service statuses."""
         return await self._request_json("GET", "/api/site/accountservicestatus")
